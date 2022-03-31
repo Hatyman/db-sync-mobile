@@ -113,29 +113,17 @@ function getRelationshipProperties(
   for (const connectedTableName in tableScheme.connections) {
     const connection = tableScheme.connections[connectedTableName];
     const connectionType = getConnectionType(connection, tableScheme, tables);
-    switch (connectionType) {
-      case ConnectionTypeEnum.OneToOne:
-        relationshipProperties[connection.tableName] = getConnectionAttributeType(
-          ConnectionTypeEnum.OneToOne,
-          connection,
-          tableScheme
-        );
-        break;
-      case ConnectionTypeEnum.ManyToOne:
-        relationshipProperties[connection.tableName] = getConnectionAttributeType(
-          ConnectionTypeEnum.ManyToOne,
-          connection,
-          tableScheme
-        );
-        break;
-      case ConnectionTypeEnum.OneToMany:
-        relationshipProperties[getConnectionFieldListName(connection)] = getConnectionAttributeType(
-          ConnectionTypeEnum.OneToMany,
-          connection,
-          tableScheme
-        );
-        break;
-    }
+
+    let attributeName =
+      connectionType === ConnectionTypeEnum.OneToMany
+        ? getConnectionFieldListName(connection)
+        : connection.tableName;
+
+    relationshipProperties[attributeName] = getConnectionAttributeType(
+      connectionType,
+      connection,
+      tableScheme
+    );
   }
 
   return relationshipProperties;
