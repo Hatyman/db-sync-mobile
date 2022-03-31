@@ -7,8 +7,13 @@
 //----------------------
 // ReSharper disable InconsistentNaming
 
-import axios, { AxiosError, AxiosInstance, AxiosRequestConfig, AxiosResponse, CancelToken } from 'axios';
-import { QueryClient, QueryFunctionContext, QueryKey, useQuery, UseQueryOptions, UseQueryResult } from 'react-query';
+import axios, {
+  AxiosError,
+  AxiosInstance,
+  AxiosRequestConfig,
+  AxiosResponse,
+  CancelToken,
+} from 'axios';
 
 export class ProductClient {
   private instance: AxiosInstance;
@@ -2533,14 +2538,18 @@ export enum SortOrder {
 }
 
 export class DbSchemeDto implements IDbSchemeDto {
-  tables?: { [key: string]: TableSchemeDto };
-  schemas?: { [key: string]: SchemeDto };
+  tables!: { [key: string]: TableSchemeDto };
+  schemas!: { [key: string]: SchemeDto };
 
   constructor(data?: IDbSchemeDto) {
     if (data) {
       for (var property in data) {
         if (data.hasOwnProperty(property)) (<any>this)[property] = (<any>data)[property];
       }
+    }
+    if (!data) {
+      this.tables = {};
+      this.schemas = {};
     }
   }
 
@@ -2599,8 +2608,8 @@ export class DbSchemeDto implements IDbSchemeDto {
 }
 
 export interface IDbSchemeDto {
-  tables?: { [key: string]: TableSchemeDto };
-  schemas?: { [key: string]: SchemeDto };
+  tables: { [key: string]: TableSchemeDto };
+  schemas: { [key: string]: SchemeDto };
 }
 
 export class TableSchemeDto implements ITableSchemeDto {
@@ -2753,8 +2762,8 @@ export interface IAttributeDto {
 }
 
 export class AttributeSchemeDto implements IAttributeSchemeDto {
-  type!: SQLiteDataType | null;
-  format!: SQLiteDataFormat | null;
+  type!: RealmDataType | null;
+  format!: DataFormat | null;
   ref?: string | null;
 
   constructor(data?: IAttributeSchemeDto) {
@@ -2790,19 +2799,22 @@ export class AttributeSchemeDto implements IAttributeSchemeDto {
 }
 
 export interface IAttributeSchemeDto {
-  type: SQLiteDataType | null;
-  format: SQLiteDataFormat | null;
+  type: RealmDataType | null;
+  format: DataFormat | null;
   ref?: string | null;
 }
 
-export enum SQLiteDataType {
-  Integer = 'Integer',
-  Real = 'Real',
-  Text = 'Text',
-  Blob = 'Blob',
+export enum RealmDataType {
+  Int = 'Int',
+  Bool = 'Bool',
+  Double = 'Double',
+  String = 'String',
+  Data = 'Data',
+  ObjectId = 'ObjectId',
+  Date = 'Date',
 }
 
-export enum SQLiteDataFormat {
+export enum DataFormat {
   Date = 'Date',
   Time = 'Time',
   DateTime = 'DateTime',
@@ -3010,6 +3022,15 @@ function throwException(
 function isAxiosError(obj: any | undefined): obj is AxiosError {
   return obj && obj.isAxiosError === true;
 }
+
+import {
+  useQuery,
+  UseQueryResult,
+  QueryFunctionContext,
+  UseQueryOptions,
+  QueryClient,
+  QueryKey,
+} from 'react-query';
 
 function removeUndefinedFromArrayTail<T>(arr: T[]): T[] {
   let lastDefinedValueIndex = arr.length - 1;
