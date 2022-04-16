@@ -746,6 +746,73 @@ export class DbSchemeClient {
     }
     return Promise.resolve<DbSchemeDto>(null as any);
   }
+
+  getTransactions(cancelToken?: CancelToken | undefined): Promise<TransactionDto> {
+    let url_ = this.baseUrl + '/api/scheme/transactions';
+    url_ = url_.replace(/[?&]$/, '');
+
+    let options_ = <AxiosRequestConfig>{
+      method: 'GET',
+      url: url_,
+      headers: {
+        Accept: 'application/json',
+      },
+      cancelToken,
+    };
+
+    return this.instance
+      .request(options_)
+      .catch((_error: any) => {
+        if (isAxiosError(_error) && _error.response) {
+          return _error.response;
+        } else {
+          throw _error;
+        }
+      })
+      .then((_response: AxiosResponse) => {
+        return this.processGetTransactions(_response);
+      });
+  }
+
+  protected processGetTransactions(response: AxiosResponse): Promise<TransactionDto> {
+    const status = response.status;
+    let _headers: any = {};
+    if (response.headers && typeof response.headers === 'object') {
+      for (let k in response.headers) {
+        if (response.headers.hasOwnProperty(k)) {
+          _headers[k] = response.headers[k];
+        }
+      }
+    }
+    if (status === 400) {
+      const _responseText = response.data;
+      let result400: any = null;
+      let resultData400 = _responseText;
+      result400 = ValidationProblemDetails.fromJS(resultData400);
+      return throwException(
+        'A server side error occurred.',
+        status,
+        _responseText,
+        _headers,
+        result400
+      );
+    } else if (status === 200) {
+      const _responseText = response.data;
+      let result200: any = null;
+      let resultData200 = _responseText;
+      result200 = TransactionDto.fromJS(resultData200);
+      return Promise.resolve<TransactionDto>(result200);
+    } else if (status !== 200 && status !== 204) {
+      const _responseText = response.data;
+      return throwException(
+        'An unexpected server error occurred.',
+        status,
+        _responseText,
+        _headers
+      );
+    }
+    return Promise.resolve<TransactionDto>(null as any);
+  }
 }
 export class DbSchemeQuery {
   get baseUrl() {
@@ -808,6 +875,59 @@ export class DbSchemeQuery {
     queryClient: QueryClient,
     queryKey: QueryKey,
     updater: (data: DbSchemeDto | undefined) => DbSchemeDto
+  ) {
+    queryClient.setQueryData(queryKey, updater);
+  }
+
+  getTransactions(): string {
+    let url_ = this.baseUrl + '/api/scheme/transactions';
+    url_ = url_.replace(/[?&]$/, '');
+    return url_;
+  }
+
+  static getTransactionsDefaultOptions?: UseQueryOptions<TransactionDto, unknown, TransactionDto> =
+    {};
+  public static getTransactionsQueryKey(): QueryKey;
+  public static getTransactionsQueryKey(...params: any[]): QueryKey {
+    return removeUndefinedFromArrayTail(['DbSchemeClient', 'getTransactions']);
+  }
+
+  private static getTransactions() {
+    return DbSchemeQuery.Client.getTransactions();
+  }
+
+  static useGetTransactionsQuery<TSelectData = TransactionDto, TError = unknown>(
+    options?: UseQueryOptions<TransactionDto, TError, TSelectData>
+  ): UseQueryResult<TSelectData, TError>;
+  static useGetTransactionsQuery<TSelectData = TransactionDto, TError = unknown>(
+    ...params: any[]
+  ): UseQueryResult<TSelectData, TError> {
+    let options: UseQueryOptions<TransactionDto, TError, TSelectData> | undefined = undefined;
+
+    options = params[0] as any;
+
+    return useQuery<TransactionDto, TError, TSelectData>({
+      queryFn: DbSchemeQuery.getTransactions,
+      queryKey: DbSchemeQuery.getTransactionsQueryKey(),
+      ...(DbSchemeQuery.getTransactionsDefaultOptions as unknown as UseQueryOptions<
+        TransactionDto,
+        TError,
+        TSelectData
+      >),
+      ...options,
+    });
+  }
+  static setGetTransactionsData(
+    queryClient: QueryClient,
+    updater: (data: TransactionDto | undefined) => TransactionDto
+  ) {
+    queryClient.setQueryData(DbSchemeQuery.getTransactionsQueryKey(), updater);
+  }
+
+  static setGetTransactionsDataByQueryId(
+    queryClient: QueryClient,
+    queryKey: QueryKey,
+    updater: (data: TransactionDto | undefined) => TransactionDto
   ) {
     queryClient.setQueryData(queryKey, updater);
   }
@@ -2931,6 +3051,84 @@ export interface ISchemeDto {
   name: string;
   areValuesConfigured: boolean | null;
   enum?: { [key: string]: number } | null;
+}
+
+export class TransactionDto implements ITransactionDto {
+  id!: string;
+  tableName!: string;
+  changes?: { [key: string]: any };
+  changeType!: ChangeType;
+  instanceId!: string;
+  creationDate!: Date;
+  syncDate!: Date | null;
+
+  constructor(data?: ITransactionDto) {
+    if (data) {
+      for (var property in data) {
+        if (data.hasOwnProperty(property)) (<any>this)[property] = (<any>data)[property];
+      }
+    }
+  }
+
+  init(_data?: any) {
+    if (_data) {
+      this.id = _data['id'];
+      this.tableName = _data['tableName'];
+      if (_data['changes']) {
+        this.changes = {} as any;
+        for (let key in _data['changes']) {
+          if (_data['changes'].hasOwnProperty(key))
+            (<any>this.changes)![key] = _data['changes'][key];
+        }
+      }
+      this.changeType = _data['changeType'];
+      this.instanceId = _data['instanceId'];
+      this.creationDate = _data['creationDate']
+        ? new Date(_data['creationDate'].toString())
+        : <any>undefined;
+      this.syncDate = _data['syncDate'] ? new Date(_data['syncDate'].toString()) : <any>undefined;
+    }
+  }
+
+  static fromJS(data: any): TransactionDto {
+    data = typeof data === 'object' ? data : {};
+    let result = new TransactionDto();
+    result.init(data);
+    return result;
+  }
+
+  toJSON(data?: any) {
+    data = typeof data === 'object' ? data : {};
+    data['id'] = this.id;
+    data['tableName'] = this.tableName;
+    if (this.changes) {
+      data['changes'] = {};
+      for (let key in this.changes) {
+        if (this.changes.hasOwnProperty(key)) (<any>data['changes'])[key] = this.changes[key];
+      }
+    }
+    data['changeType'] = this.changeType;
+    data['instanceId'] = this.instanceId;
+    data['creationDate'] = this.creationDate ? this.creationDate.toISOString() : this.creationDate;
+    data['syncDate'] = this.syncDate ? this.syncDate.toISOString() : this.syncDate;
+    return data;
+  }
+}
+
+export interface ITransactionDto {
+  id: string;
+  tableName: string;
+  changes?: { [key: string]: any };
+  changeType: ChangeType;
+  instanceId: string;
+  creationDate: Date;
+  syncDate: Date | null;
+}
+
+export enum ChangeType {
+  Insert = 'Insert',
+  Update = 'Update',
+  Delete = 'Delete',
 }
 
 export class TestPatchDto implements ITestPatchDto {

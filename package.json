@@ -4,11 +4,16 @@
   "private": true,
   "scripts": {
     "android": "react-native run-android",
+    "android:clean": "yarn cleanup-android && yarn configure:android && react-native run-android",
     "ios": "react-native run-ios",
     "start": "react-native start",
     "test": "jest",
     "generate-api-client-axios": "react-query-swagger openapi2tsclient /runtime:Net60 /input:http://localhost:48903/swagger/v1/swagger.json /output:src/services/api/api-client.ts /template:Axios /serviceHost:. /generateConstructorInterface:true /generateOptionalParameters:true /markOptionalProperties:true /nullValue:undefined /typeStyle:Class && yarn replace \"this\\.(\\w*?)\\.toISOString\\(\\) : <any>undefined\" \"this.$1.toISOString() : this.$1\" src/services/api/api-client.ts && yarn replace \"\\| undefined;\" \"| null;\"  src/services/api/api-client.ts && yarn replace \"\\| null \\| null;\" \"| null;\" src/services/api/api-client.ts && yarn replace \"as Blob\" \"as unknown as Blob\" src/services/api/api-client.ts",
-    "lint": "eslint . --ext .js,.jsx,.ts,.tsx"
+    "lint": "eslint . --ext .js,.jsx,.ts,.tsx",
+    "clean": "cd android && gradlew clean && cd .. && rimraf node_modules && yarn cache clean && yarn install",
+    "configure:android": "adb reverse tcp:8081 tcp:8081 && adb reverse tcp:8380 tcp:8380 && adb reverse tcp:5200 tcp:5200 && adb reverse tcp:8097 tcp:8097",
+    "typecheck": "tsc --skipLibCheck",
+    "cleanup-android": "cd android && gradlew clean"
   },
   "dependencies": {
     "axios": "^0.26.1",
@@ -16,8 +21,10 @@
     "prettier": "^2.6.1",
     "react": "17.0.2",
     "react-native": "0.67.4",
-    "react-query": "^3.34.19",
-    "realm": "^10.14.0"
+    "react-query": "3.34.19",
+    "realm": "10.14.0",
+    "react-native-get-random-values": "1.7.2",
+    "@microsoft/signalr": "6.0.4"
   },
   "devDependencies": {
     "@babel/core": "^7.12.9",

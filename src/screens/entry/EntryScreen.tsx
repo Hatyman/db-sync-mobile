@@ -1,5 +1,6 @@
 import React, { FC } from 'react';
 import {
+  Button,
   SafeAreaView,
   ScrollView,
   StatusBar,
@@ -16,13 +17,21 @@ import {
   ReloadInstructions,
 } from 'react-native/Libraries/NewAppScreen';
 import { Section } from 'components/Section';
-import { DbSchemeQuery } from 'services/api/api-client';
+import { useRealmData, useTransactions } from 'utils/realm-utils';
+import { DataRow } from 'components/DataRow';
+import { RealmService } from 'services/RealmService';
+
+type BoxesScheme = {
+  Id: string;
+  IsFull: boolean;
+};
 
 export const EntryScreen: FC = function EntryScreen() {
   const isDarkMode = useColorScheme() === 'dark';
-  const { data } = DbSchemeQuery.useGetTableSchemeQuery();
-
-  console.log('data', data);
+  const { data, realm, snapshotRealm } = useRealmData<BoxesScheme>({
+    type: 'Boxes',
+  });
+  const transactions = useTransactions();
 
   const backgroundStyle = {
     backgroundColor: isDarkMode ? Colors.darker : Colors.lighter,
@@ -37,10 +46,60 @@ export const EntryScreen: FC = function EntryScreen() {
             backgroundColor: isDarkMode ? Colors.black : Colors.white,
           }}
         >
+          <Button
+            title={'Delete all'}
+            color={'#6a2a2a'}
+            onPress={() => {
+              realm?.write(() => {
+                realm?.deleteAll();
+              });
+              snapshotRealm?.write(() => {
+                snapshotRealm?.deleteAll();
+              });
+            }}
+          />
+          <Button
+            title={'Add box'}
+            onPress={() => {
+              realm?.write(() => {
+                const id = RealmService.getNewId();
+                console.log('id', id);
+                realm?.create<BoxesScheme>('Boxes', {
+                  Id: id,
+                  IsFull: Math.random() > 0.5,
+                });
+              });
+            }}
+          />
+          {data.map((box, index) => (
+            <DataRow
+              key={box.Id}
+              onPress={() => {
+                realm?.write(() => {
+                  box.IsFull = !box.IsFull;
+                });
+              }}
+              onLongPress={() => {
+                realm?.write(() => {
+                  realm?.delete(box);
+                });
+              }}
+            >
+              <Text adjustsFontSizeToFit={true}>{index}</Text>
+              <Text adjustsFontSizeToFit={true}>{box.Id}</Text>
+              <Text adjustsFontSizeToFit={true}>{String(box.IsFull)}</Text>
+            </DataRow>
+          ))}
           <Section title="Step One">
             Edit <Text style={ownStyles.highlight}>App.tsx</Text> to change this screen and then
             come back to see your edits.
           </Section>
+          {transactions.map((transaction, index) => (
+            <DataRow key={transaction.Id}>
+              <Text adjustsFontSizeToFit={true}>{index}</Text>
+              <Text adjustsFontSizeToFit={true}>{JSON.stringify(transaction.toJSON())}</Text>
+            </DataRow>
+          ))}
           <Section title="See Your Changes">
             <ReloadInstructions />
           </Section>

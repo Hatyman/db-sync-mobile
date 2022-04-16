@@ -1,164 +1,219 @@
-import Realm, { ObjectSchema, ObjectSchemaProperty, PropertiesTypes, PropertyType } from 'realm';
-import {
-  AttributeDto,
-  ConnectionSchemeDto,
-  DbSchemeDto,
-  IDbSchemeDto,
-  TableSchemeDto,
-} from 'services/api/api-client';
-import { getTextWithLowerFirstLetter } from 'utils/text-utils';
+import { RealmService } from 'services/RealmService';
+import { useEffect, useRef, useState } from 'react';
+import Realm, { UpdateMode } from 'realm';
+import { ChangeTypeNumber, TransactionScheme } from 'services/d';
 
-enum ConnectionTypeEnum {
-  OneToOne,
-  /**
-   * Many own records connected with one external record
-   */
-  ManyToOne,
-  /**
-   * Own record has many connected external records
-   */
-  OneToMany,
+let _realmService: RealmService;
+
+export function setRealmService(realmService: RealmService) {
+  _realmService = realmService;
 }
 
-/**
- * const path = attribute.scheme.ref.split('/')
- * const typeName = path[path.length - 1];
- * const scheme = schemas[typeName]?.enum
- */
-
-function getRealmType(attribute: AttributeDto): string {
-  let type: string = '';
-  if (attribute.scheme.type) {
-    type = getTextWithLowerFirstLetter(attribute.scheme.type);
-  } else if (attribute.scheme.ref) {
-    type = 'int';
+function getRealmService() {
+  if (!_realmService) {
+    _realmService = new RealmService();
   }
-  if (attribute.isNullable) {
-    type += '?';
-  }
-
-  return type;
+  return _realmService;
 }
 
-function getConnectionType(
-  connection: ConnectionSchemeDto,
-  ownTable: TableSchemeDto,
-  tables: IDbSchemeDto['tables']
-): ConnectionTypeEnum {
-  if (connection.isIncomingReference) {
-    const connectedTableAttributes = tables[connection.tableName].attributes;
-    if (
-      connection.externalAttributeNames?.some(
-        attributeName => connectedTableAttributes[attributeName].isUnique
-      )
-    ) {
-      return ConnectionTypeEnum.OneToOne;
-    } else {
-      return ConnectionTypeEnum.OneToMany;
-    }
-  } else if (
-    connection.ownAttributeNames?.some(attributeName => ownTable.attributes[attributeName].isUnique)
-  ) {
-    return ConnectionTypeEnum.OneToOne;
-  } else {
-    return ConnectionTypeEnum.ManyToOne;
-  }
+function isSimpleType(x: unknown): x is string | number | undefined | boolean | null {
+  const xType = typeof x;
+  return (
+    x === null ||
+    (xType !== 'object' && xType !== 'function' && xType !== 'bigint' && xType !== 'symbol')
+  );
 }
 
-function getConnectionFieldListName(connection: ConnectionSchemeDto): string {
-  return connection.tableName + 'List';
-}
+const detailsSelector = (results: any) => results;
 
-function getConnectionAttributeType(
-  connectionType: ConnectionTypeEnum,
-  connection: ConnectionSchemeDto,
-  table: TableSchemeDto
-): PropertyType | ObjectSchemaProperty {
-  switch (connectionType) {
-    case ConnectionTypeEnum.OneToOne:
-      if (connection.isIncomingReference) {
-        return {
-          type: 'linkingObjects',
-          objectType: connection.tableName,
-          property: connection.tableName,
-        };
-      } else {
-        let type = connection.tableName;
-        if (
-          connection.ownAttributeNames?.every(
-            attributeName => table.attributes[attributeName].isNullable
-          )
-        ) {
-          type += '?';
-        }
-        return type;
+type UseRealmDataProps<T> = {
+  type: string;
+  resultsSelector?: (objects: Realm.Results<T & Realm.Object>) => Realm.Results<T & Realm.Object>;
+  isDataUpdateDisabled?: boolean;
+};
+
+export function useRealmData<T extends Record<string | number, any>>({
+  type,
+  resultsSelector = detailsSelector,
+  isDataUpdateDisabled,
+}: UseRealmDataProps<T>) {
+  const [data, setData] = useState<(T & Realm.Object)[]>([]);
+  const realmRef = useRef<Realm | null>(null);
+
+  const realmSnapshotTempRef = useRef<Realm | null>(null);
+
+  useEffect(() => {
+    const service = getRealmService();
+    service.open().then(({ realm, snapshotRealm }) => {
+      realmRef.current = realm;
+      realmSnapshotTempRef.current = snapshotRealm;
+      const dataResults = resultsSelector(realm.objects<T>(type));
+      const snapshotData = resultsSelector(snapshotRealm.objects<T>(type));
+      const objectSchema =
+        dataResults[0]?.objectSchema() ?? realm.schema.find(x => x.name === type);
+      const primaryKeyName = objectSchema?.primaryKey ?? objectSchema?.primaryKey ?? 'Id';
+
+      if (!isDataUpdateDisabled) {
+        // set state to the initial value of your realm objects
+        setData([...dataResults]);
       }
-    case ConnectionTypeEnum.ManyToOne:
-      return {
-        type: 'linkingObjects',
-        objectType: connection.tableName,
-        property: getConnectionFieldListName(connection),
+
+      const isSyncEnabled = service.isTableSyncEnabled(type);
+      try {
+        dataResults.addListener((currentData, changes) => {
+          const creationDate = new Date();
+
+          if (!isDataUpdateDisabled) {
+            // update state of data to the updated value
+            setData([...dataResults]);
+          }
+
+          if (!isSyncEnabled) return;
+
+          console.log('snapshotData', snapshotData);
+          console.log('dataResults ', dataResults);
+
+          snapshotRealm.write(() => {
+            realm.write(() => {
+              // Handle deleted Dog objects
+              changes.deletions.forEach(index => {
+                // You cannot directly access deleted objects,
+                // but you can update a UI list, etc. based on the index.
+                console.log('Deleted index', index);
+                const snapshotDeletedItem = snapshotData[index];
+                console.log('Deleted  data', snapshotDeletedItem);
+                try {
+                  realm.create<TransactionScheme>(RealmService.TransactionsName, {
+                    Id: RealmService.getNewId(),
+                    ChangeType: ChangeTypeNumber.Delete,
+                    isSynced: false,
+                    InstanceId: snapshotDeletedItem[primaryKeyName],
+                    CreationDate: creationDate,
+                    TableName: type,
+                  });
+                } catch (e) {
+                  console.error('Error on delete', e);
+                } finally {
+                  snapshotRealm.delete(snapshotDeletedItem);
+                }
+              });
+              // Handle newly added Dog objects
+              changes.insertions.forEach(index => {
+                const insertedObject = currentData[index];
+                console.log('Inserted', insertedObject);
+                console.log('InstanceId', insertedObject[primaryKeyName]);
+
+                const content = {} as Record<string, any>;
+
+                for (const attribute of insertedObject.keys()) {
+                  if (!service.isDbAttribute(type, attribute)) continue;
+
+                  content[attribute] = insertedObject[attribute];
+                }
+
+                try {
+                  realm.create<TransactionScheme>(RealmService.TransactionsName, {
+                    Id: RealmService.getNewId(),
+                    ChangeType: ChangeTypeNumber.Insert,
+                    isSynced: false,
+                    InstanceId: insertedObject[primaryKeyName],
+                    CreationDate: creationDate,
+                    Changes: content,
+                    TableName: type,
+                  });
+                } catch (e) {
+                  console.error('Error on creation', e);
+                } finally {
+                  snapshotRealm.create(type, insertedObject);
+                }
+              });
+              // Handle Dog objects that were modified
+              changes.oldModifications.forEach((index, i) => {
+                const afterModifications = currentData[changes.newModifications[i]];
+                const beforeModifications = snapshotData[index];
+                console.log('Modified from', beforeModifications);
+                console.log('Modified   to', afterModifications);
+
+                const changeSet: Record<string, string | number | boolean | null> = {};
+                let attributes = afterModifications.keys();
+                for (const attribute of attributes) {
+                  const attributeSnapshot = beforeModifications[attribute];
+                  const currentAttribute = afterModifications[attribute];
+                  if (
+                    isSimpleType(attributeSnapshot) &&
+                    isSimpleType(currentAttribute) &&
+                    attributeSnapshot !== currentAttribute &&
+                    service.isDbAttribute(type, attribute) &&
+                    service.isPropertySyncEnabled(type, attribute, isSyncEnabled)
+                  ) {
+                    changeSet[attribute] = currentAttribute ?? null;
+                  }
+                }
+
+                try {
+                  if (Object.values(changeSet).length) {
+                    realm.create<TransactionScheme>(RealmService.TransactionsName, {
+                      Id: RealmService.getNewId(),
+                      ChangeType: ChangeTypeNumber.Update,
+                      isSynced: false,
+                      InstanceId: afterModifications[primaryKeyName],
+                      CreationDate: creationDate,
+                      TableName: type,
+                      Changes: changeSet,
+                    });
+                  }
+                } catch (e) {
+                  console.log('Error on modifying', e);
+                } finally {
+                  snapshotRealm.create(type, afterModifications, UpdateMode.Modified);
+                }
+              });
+            });
+          });
+          console.log(
+            '-------------------------------------------------------------------------------------'
+          );
+        });
+      } catch (error) {
+        console.error(
+          `Unable to update the tasks' state, an exception was thrown within the change listener: ${error}`
+        );
+      }
+
+      return () => {
+        dataResults.removeAllListeners();
+        realmRef.current = null;
+        realmSnapshotTempRef.current = null;
+        realm.close();
       };
-    case ConnectionTypeEnum.OneToMany:
-      return `${connection.tableName}[]`;
-  }
-}
-
-function getRelationshipProperties(
-  tableScheme: TableSchemeDto,
-  tables: IDbSchemeDto['tables']
-): PropertiesTypes {
-  const relationshipProperties: PropertiesTypes = {};
-
-  for (const connectedTableName in tableScheme.connections) {
-    const connection = tableScheme.connections[connectedTableName];
-    const connectionType = getConnectionType(connection, tableScheme, tables);
-
-    let attributeName =
-      connectionType === ConnectionTypeEnum.OneToMany
-        ? getConnectionFieldListName(connection)
-        : connection.tableName;
-
-    relationshipProperties[attributeName] = getConnectionAttributeType(
-      connectionType,
-      connection,
-      tableScheme
-    );
-  }
-
-  return relationshipProperties;
-}
-
-function getDbScheme(dbScheme: DbSchemeDto): ObjectSchema[] {
-  const tableSchemas: ObjectSchema[] = [];
-
-  for (const tableName in dbScheme.tables) {
-    const tableScheme = dbScheme.tables[tableName];
-    const properties: PropertiesTypes = {};
-
-    for (const attributeName in tableScheme.attributes) {
-      const attribute = tableScheme.attributes[attributeName];
-      properties[attributeName] = getRealmType(attribute);
-    }
-
-    Object.assign(properties, getRelationshipProperties(tableScheme, dbScheme.tables));
-
-    tableSchemas.push({
-      name: tableScheme.name,
-      primaryKey: tableScheme.primaryKeys[0],
-      properties,
     });
-  }
+  }, []);
 
-  return tableSchemas;
+  return { data, realm: realmRef.current, snapshotRealm: realmSnapshotTempRef.current };
 }
 
-export async function openDbConnection(dbScheme: DbSchemeDto): Promise<Realm> {
-  const tableSchemas: ObjectSchema[] = getDbScheme(dbScheme);
+export function useTransactions() {
+  const [data, setData] = useState<(TransactionScheme & Realm.Object)[]>([]);
+  useEffect(() => {
+    const service = getRealmService();
+    service.open().then(({ realm }) => {
+      const transactions = realm.objects<TransactionScheme>(RealmService.TransactionsName);
+      setData([...transactions]);
+      try {
+        transactions.addListener(() => {
+          setData([...transactions]);
+        });
+      } catch (error) {
+        console.error(
+          `Unable to update the tasks' state, an exception was thrown within the change listener: ${error}`
+        );
+      }
+      return () => {
+        transactions.removeAllListeners();
+        realm.close();
+      };
+    });
+  }, []);
 
-  const realm = await Realm.open({
-    path: 'myrealm',
-    schema: tableSchemas,
-  });
-  return realm;
+  return data;
 }

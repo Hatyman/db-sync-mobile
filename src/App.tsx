@@ -11,6 +11,16 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from 'react-query';
 import { EntryScreen } from 'screens/entry/EntryScreen';
+import { setAxiosFactory } from 'services/api/api-client';
+import axios from 'axios';
+import { RealmService } from 'services/RealmService';
+import { setRealmService } from 'utils/realm-utils';
+import { schemeConfig } from 'services/scheme-config';
+
+const backendAxios = axios.create({
+  baseURL: 'http://192.168.101.210:48903',
+});
+setAxiosFactory(() => backendAxios);
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -23,6 +33,8 @@ const queryClient = new QueryClient({
 });
 
 const App = () => {
+  const realmService = new RealmService(schemeConfig);
+  setRealmService(realmService);
   return (
     <QueryClientProvider client={queryClient}>
       <EntryScreen />
