@@ -9,7 +9,7 @@ export function setRealmService(realmService: RealmService) {
   _realmService = realmService;
 }
 
-function getRealmService() {
+export function getRealmService() {
   if (!_realmService) {
     _realmService = new RealmService();
   }

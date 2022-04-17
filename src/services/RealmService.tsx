@@ -10,10 +10,13 @@ import {
 } from 'services/api/api-client';
 import { getTextWithLowerFirstLetter } from 'utils/text-utils';
 import { ConnectionTypeEnum, DbSchemeConfig } from 'services/d';
+import { TransportService } from 'services/TransportService';
 
 export class RealmService {
   public readonly schemeConfig: DbSchemeConfig | undefined;
   public dbSchemeDto: DbSchemeDto | undefined;
+
+  public transportService: TransportService;
 
   public static readonly TransactionsName = 'Transactions';
 
@@ -24,9 +27,10 @@ export class RealmService {
     return this._schemas;
   }
 
-  constructor(schemeConfig?: DbSchemeConfig) {
+  constructor(schemeConfig?: DbSchemeConfig, syncPath?: string) {
     this.schemeConfig = schemeConfig;
     this.loadingPromise = this.loadSchemas();
+    this.transportService = new TransportService(syncPath);
   }
 
   protected async loadSchemas() {

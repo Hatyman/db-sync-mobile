@@ -1,4 +1,4 @@
-import React, { FC } from 'react';
+import React, { FC, useEffect } from 'react';
 import {
   Button,
   SafeAreaView,
@@ -17,9 +17,10 @@ import {
   ReloadInstructions,
 } from 'react-native/Libraries/NewAppScreen';
 import { Section } from 'components/Section';
-import { useRealmData, useTransactions } from 'utils/realm-utils';
+import { getRealmService, useRealmData, useTransactions } from 'utils/realm-utils';
 import { DataRow } from 'components/DataRow';
 import { RealmService } from 'services/RealmService';
+import { HubConnectionState } from '@microsoft/signalr';
 
 type BoxesScheme = {
   Id: string;
@@ -32,6 +33,17 @@ export const EntryScreen: FC = function EntryScreen() {
     type: 'Boxes',
   });
   const transactions = useTransactions();
+
+  useEffect(() => {
+    const service = getRealmService();
+    const state = service.transportService.connectionState;
+    console.log('state', state);
+    (async () => {
+      const response = await service.transportService.invokeTest<string>('some test message');
+      console.log('response', response);
+      await service.transportService.sendTest('sent string');
+    })();
+  }, []);
 
   const backgroundStyle = {
     backgroundColor: isDarkMode ? Colors.darker : Colors.lighter,
