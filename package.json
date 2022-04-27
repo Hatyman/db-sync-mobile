@@ -16,21 +16,24 @@
     "cleanup-android": "cd android && gradlew clean"
   },
   "dependencies": {
+    "@microsoft/signalr": "6.0.4",
     "axios": "^0.26.1",
     "date-fns": "^2.28.0",
+    "lodash.throttle": "4.1.1",
     "prettier": "^2.6.1",
     "react": "17.0.2",
     "react-native": "0.67.4",
-    "react-query": "3.34.19",
-    "realm": "10.14.0",
     "react-native-get-random-values": "1.7.2",
-    "@microsoft/signalr": "6.0.4"
+    "react-query": "3.34.19",
+    "realm": "10.14.0"
   },
   "devDependencies": {
     "@babel/core": "^7.12.9",
+    "@types/lodash.debounce": "4.0.7",
     "@babel/runtime": "^7.12.5",
     "@react-native-community/eslint-config": "^2.0.0",
     "@types/jest": "^26.0.23",
+    "@types/lodash.throttle": "^4.1.6",
     "@types/react-native": "^0.66.15",
     "@types/react-test-renderer": "^17.0.1",
     "@typescript-eslint/eslint-plugin": "^5.7.0",

@@ -32,7 +32,7 @@ export type TransactionScheme = {
   ChangeType: ChangeTypeNumber;
   Changes?: Record<string, string | number | boolean | null>;
   CreationDate: Date;
-  InstanceId?: string;
+  InstanceId: string;
   SyncDate?: Date;
   TableName: string;
 };

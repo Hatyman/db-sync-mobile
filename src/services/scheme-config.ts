@@ -10,7 +10,7 @@ export const schemeConfig: DbSchemeConfig = {
   Boxes: {
     properties: {
       Id: true,
-      IsFull: false,
+      IsFull: true,
     },
   },
   BoxSale: {

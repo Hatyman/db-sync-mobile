@@ -47,10 +47,11 @@ export function useRealmData<T extends Record<string | number, any>>({
     service.open().then(({ realm, snapshotRealm }) => {
       realmRef.current = realm;
       realmSnapshotTempRef.current = snapshotRealm;
-      const dataResults = resultsSelector(realm.objects<T>(type));
-      const snapshotData = resultsSelector(snapshotRealm.objects<T>(type));
+      const dataReference = realm.objects<T>(type);
+      const dataResults = resultsSelector(dataReference);
+      const snapshotReference = snapshotRealm.objects<T>(type);
       const objectSchema =
-        dataResults[0]?.objectSchema() ?? realm.schema.find(x => x.name === type);
+        dataReference[0]?.objectSchema() ?? realm.schema.find(x => x.name === type);
       const primaryKeyName = objectSchema?.primaryKey ?? objectSchema?.primaryKey ?? 'Id';
 
       if (!isDataUpdateDisabled) {
@@ -60,7 +61,7 @@ export function useRealmData<T extends Record<string | number, any>>({
 
       const isSyncEnabled = service.isTableSyncEnabled(type);
       try {
-        dataResults.addListener((currentData, changes) => {
+        dataReference.addListener((currentData, changes) => {
           const creationDate = new Date();
 
           if (!isDataUpdateDisabled) {
@@ -70,17 +71,14 @@ export function useRealmData<T extends Record<string | number, any>>({
 
           if (!isSyncEnabled) return;
 
-          console.log('snapshotData', snapshotData);
-          console.log('dataResults ', dataResults);
-
           snapshotRealm.write(() => {
-            realm.write(() => {
+            service.safeWrite(() => {
               // Handle deleted Dog objects
               changes.deletions.forEach(index => {
                 // You cannot directly access deleted objects,
                 // but you can update a UI list, etc. based on the index.
                 console.log('Deleted index', index);
-                const snapshotDeletedItem = snapshotData[index];
+                const snapshotDeletedItem = snapshotReference[index];
                 console.log('Deleted  data', snapshotDeletedItem);
                 try {
                   realm.create<TransactionScheme>(RealmService.TransactionsName, {
@@ -130,7 +128,7 @@ export function useRealmData<T extends Record<string | number, any>>({
               // Handle Dog objects that were modified
               changes.oldModifications.forEach((index, i) => {
                 const afterModifications = currentData[changes.newModifications[i]];
-                const beforeModifications = snapshotData[index];
+                const beforeModifications = snapshotReference[index];
                 console.log('Modified from', beforeModifications);
                 console.log('Modified   to', afterModifications);
 
@@ -140,8 +138,6 @@ export function useRealmData<T extends Record<string | number, any>>({
                   const attributeSnapshot = beforeModifications[attribute];
                   const currentAttribute = afterModifications[attribute];
                   if (
-                    isSimpleType(attributeSnapshot) &&
-                    isSimpleType(currentAttribute) &&
                     attributeSnapshot !== currentAttribute &&
                     service.isDbAttribute(type, attribute) &&
                     service.isPropertySyncEnabled(type, attribute, isSyncEnabled)
@@ -181,7 +177,7 @@ export function useRealmData<T extends Record<string | number, any>>({
       }
 
       return () => {
-        dataResults.removeAllListeners();
+        dataReference.removeAllListeners();
         realmRef.current = null;
         realmSnapshotTempRef.current = null;
         realm.close();

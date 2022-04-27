@@ -97,10 +97,9 @@ export class ProductClient {
     return Promise.resolve<ProductDto>(null as any);
   }
 
-  delete(id?: number | undefined, cancelToken?: CancelToken | undefined): Promise<void> {
+  delete(id?: string | null | undefined, cancelToken?: CancelToken | undefined): Promise<void> {
     let url_ = this.baseUrl + '/api/products?';
-    if (id === null) throw new Error("The parameter 'id' cannot be null.");
-    else if (id !== undefined) url_ += 'id=' + encodeURIComponent('' + id) + '&';
+    if (id !== undefined && id !== null) url_ += 'id=' + encodeURIComponent('' + id) + '&';
     url_ = url_.replace(/[?&]$/, '');
 
     let options_ = <AxiosRequestConfig>{
@@ -258,7 +257,7 @@ export class ProductClient {
   }
 
   patch(
-    id: number,
+    id: string | null,
     dto: PatchProductDto,
     cancelToken?: CancelToken | undefined
   ): Promise<ProductDto> {
@@ -334,7 +333,7 @@ export class ProductClient {
     return Promise.resolve<ProductDto>(null as any);
   }
 
-  get(id: number, cancelToken?: CancelToken | undefined): Promise<ProductDto> {
+  get(id: string | null, cancelToken?: CancelToken | undefined): Promise<ProductDto> {
     let url_ = this.baseUrl + '/api/products/{id}';
     if (id === undefined || id === null) throw new Error("The parameter 'id' must be defined.");
     url_ = url_.replace('{id}', encodeURIComponent('' + id));
@@ -413,7 +412,7 @@ type SearchProductQueryParameters = {
 };
 
 type GetProductQueryParameters = {
-  id: number;
+  id: string | null;
 };
 
 export class ProductQuery {
@@ -594,7 +593,7 @@ export class ProductQuery {
     queryClient.setQueryData(queryKey, updater);
   }
 
-  get(id: number): string {
+  get(id: string | null): string {
     let url_ = this.baseUrl + '/api/products/{id}';
     if (id === undefined || id === null) throw new Error("The parameter 'id' must be defined.");
     url_ = url_.replace('{id}', encodeURIComponent('' + id));
@@ -603,7 +602,7 @@ export class ProductQuery {
   }
 
   static getDefaultOptions?: UseQueryOptions<ProductDto, unknown, ProductDto> = {};
-  public static getQueryKey(id: number): QueryKey;
+  public static getQueryKey(id: string | null): QueryKey;
   public static getQueryKey(...params: any[]): QueryKey {
     if (params.length === 1 && isParameterObject(params[0])) {
       const { id } = params[0] as GetProductQueryParameters;
@@ -615,7 +614,7 @@ export class ProductQuery {
   }
 
   private static get(context: QueryFunctionContext) {
-    return ProductQuery.Client.get(context.queryKey[2] as number);
+    return ProductQuery.Client.get(context.queryKey[2] as string | null);
   }
 
   static useGetQuery<TSelectData = ProductDto, TError = unknown>(
@@ -623,7 +622,7 @@ export class ProductQuery {
     options?: UseQueryOptions<ProductDto, TError, TSelectData>
   ): UseQueryResult<TSelectData, TError>;
   static useGetQuery<TSelectData = ProductDto, TError = unknown>(
-    id: number,
+    id: string | null,
     options?: UseQueryOptions<ProductDto, TError, TSelectData>
   ): UseQueryResult<TSelectData, TError>;
   static useGetQuery<TSelectData = ProductDto, TError = unknown>(
@@ -655,7 +654,7 @@ export class ProductQuery {
   static setGetData(
     queryClient: QueryClient,
     updater: (data: ProductDto | undefined) => ProductDto,
-    id: number
+    id: string | null
   ) {
     queryClient.setQueryData(ProductQuery.getQueryKey(id), updater);
   }
@@ -2402,7 +2401,7 @@ export interface IValidationProblemDetails extends IHttpValidationProblemDetails
 }
 
 export class ProductDto implements IProductDto {
-  id!: number;
+  id!: string;
   title!: string;
   productType!: ProductType;
   lastStockUpdatedAt!: Date;
@@ -2446,7 +2445,7 @@ export class ProductDto implements IProductDto {
 }
 
 export interface IProductDto {
-  id: number;
+  id: string;
   title: string;
   productType: ProductType;
   lastStockUpdatedAt: Date;
@@ -2602,7 +2601,7 @@ export interface IPagedResultOfProductListItemDto {
 }
 
 export class ProductListItemDto implements IProductListItemDto {
-  id!: number;
+  id!: string;
   title!: string;
   productType!: ProductType;
   lastStockUpdatedAt!: Date;
@@ -2646,7 +2645,7 @@ export class ProductListItemDto implements IProductListItemDto {
 }
 
 export interface IProductListItemDto {
-  id: number;
+  id: string;
   title: string;
   productType: ProductType;
   lastStockUpdatedAt: Date;
@@ -2734,6 +2733,8 @@ export interface IDbSchemeDto {
 
 export class TableSchemeDto implements ITableSchemeDto {
   name!: string;
+  entityFullName!: string;
+  assemblyName!: string;
   attributes!: { [key: string]: AttributeDto };
   primaryKeys!: string[];
   connections?: { [key: string]: ConnectionSchemeDto };
@@ -2753,6 +2754,8 @@ export class TableSchemeDto implements ITableSchemeDto {
   init(_data?: any) {
     if (_data) {
       this.name = _data['name'];
+      this.entityFullName = _data['entityFullName'];
+      this.assemblyName = _data['assemblyName'];
       if (_data['attributes']) {
         this.attributes = {} as any;
         for (let key in _data['attributes']) {
@@ -2788,6 +2791,8 @@ export class TableSchemeDto implements ITableSchemeDto {
   toJSON(data?: any) {
     data = typeof data === 'object' ? data : {};
     data['name'] = this.name;
+    data['entityFullName'] = this.entityFullName;
+    data['assemblyName'] = this.assemblyName;
     if (this.attributes) {
       data['attributes'] = {};
       for (let key in this.attributes) {
@@ -2816,6 +2821,8 @@ export class TableSchemeDto implements ITableSchemeDto {
 
 export interface ITableSchemeDto {
   name: string;
+  entityFullName: string;
+  assemblyName: string;
   attributes: { [key: string]: AttributeDto };
   primaryKeys: string[];
   connections?: { [key: string]: ConnectionSchemeDto };
@@ -2929,7 +2936,7 @@ export enum RealmDataType {
   Bool = 'Bool',
   Double = 'Double',
   String = 'String',
-  Data = 'Data',
+  Dictionary = 'Dictionary',
   ObjectId = 'ObjectId',
   Date = 'Date',
 }
@@ -3056,6 +3063,8 @@ export interface ISchemeDto {
 export class TransactionDto implements ITransactionDto {
   id!: string;
   tableName!: string;
+  entityFullName!: string;
+  assemblyName!: string;
   changes?: { [key: string]: any };
   changeType!: ChangeType;
   instanceId!: string;
@@ -3074,6 +3083,8 @@ export class TransactionDto implements ITransactionDto {
     if (_data) {
       this.id = _data['id'];
       this.tableName = _data['tableName'];
+      this.entityFullName = _data['entityFullName'];
+      this.assemblyName = _data['assemblyName'];
       if (_data['changes']) {
         this.changes = {} as any;
         for (let key in _data['changes']) {
@@ -3101,6 +3112,8 @@ export class TransactionDto implements ITransactionDto {
     data = typeof data === 'object' ? data : {};
     data['id'] = this.id;
     data['tableName'] = this.tableName;
+    data['entityFullName'] = this.entityFullName;
+    data['assemblyName'] = this.assemblyName;
     if (this.changes) {
       data['changes'] = {};
       for (let key in this.changes) {
@@ -3118,6 +3131,8 @@ export class TransactionDto implements ITransactionDto {
 export interface ITransactionDto {
   id: string;
   tableName: string;
+  entityFullName: string;
+  assemblyName: string;
   changes?: { [key: string]: any };
   changeType: ChangeType;
   instanceId: string;

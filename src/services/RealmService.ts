@@ -5,12 +5,16 @@ import {
   DbSchemeDto,
   DbSchemeQuery,
   IDbSchemeDto,
+  ITransactionDto,
   RealmDataType,
   TableSchemeDto,
+  TransactionDto,
 } from 'services/api/api-client';
 import { getTextWithLowerFirstLetter } from 'utils/text-utils';
-import { ConnectionTypeEnum, DbSchemeConfig } from 'services/d';
+import { ConnectionTypeEnum, DbSchemeConfig, TransactionScheme } from 'services/d';
 import { TransportService } from 'services/TransportService';
+import throttle from 'lodash.throttle';
+import { DebouncedFunc } from 'lodash';
 
 export class RealmService {
   public readonly schemeConfig: DbSchemeConfig | undefined;
@@ -22,6 +26,14 @@ export class RealmService {
 
   private readonly loadingPromise: Promise<void>;
 
+  private readonly throttledTransactionsSend: DebouncedFunc<
+    (unSyncedTransactions: TransactionScheme[]) => Promise<void>
+  >;
+
+  private unSyncedTransactions: TransactionScheme[] = [];
+
+  private transactionsRealm: Realm | null = null;
+
   private _schemas: Realm.ObjectSchema[] = [];
   public get schemas() {
     return this._schemas;
@@ -31,16 +43,98 @@ export class RealmService {
     this.schemeConfig = schemeConfig;
     this.loadingPromise = this.loadSchemas();
     this.transportService = new TransportService(syncPath);
+
+    // Decide whether it needs to be cancelled or not.
+    this.throttledTransactionsSend = throttle(this._sendTransactions, 300);
+
+    this.initializeTransactionsSync().catch(e =>
+      console.error('error on transactions sync initializing', e)
+    );
   }
 
-  protected async loadSchemas() {
+  public safeWrite = (func: () => void, realm?: Realm) => {
+    if (!this.transactionsRealm && realm) {
+      this.transactionsRealm = realm;
+    } else if (!this.transactionsRealm && !realm) {
+      throw new Error('Realm is not opened');
+    }
+
+    if (this.transactionsRealm!.isInTransaction) {
+      func();
+    } else {
+      this.transactionsRealm!.write(func);
+    }
+  };
+
+  private _sendTransactions = async (unSyncedTransactions: TransactionScheme[]) => {
+    const requestData: ITransactionDto[] = unSyncedTransactions
+      .slice(0, 30)
+      .map(this.convertTransactionSchemeToDto);
+    const syncedTransactionsIds = await this.transportService.invokeTransactions(requestData);
+
+    if (unSyncedTransactions.length > 30) {
+      this.throttledTransactionsSend(unSyncedTransactions.slice(30));
+    }
+
+    if (!this.transactionsRealm) {
+      const { realm } = await this.open();
+      this.transactionsRealm = realm;
+    }
+
+    const syncDate = new Date();
+
+    this.safeWrite(() => {
+      for (const transactionId of syncedTransactionsIds) {
+        const transaction = this.transactionsRealm?.objectForPrimaryKey<TransactionScheme>(
+          RealmService.TransactionsName,
+          transactionId
+        );
+        if (!transaction) {
+          throw new Error('There is no such transaction!');
+        }
+
+        transaction.isSynced = true;
+        transaction.SyncDate = syncDate;
+      }
+    });
+    console.log('syncedTransactionsIds', syncedTransactionsIds);
+  };
+
+  protected loadSchemas = async () => {
     try {
       this.dbSchemeDto = await DbSchemeQuery.Client.getTableScheme();
       this._schemas = this.getDbScheme(this.dbSchemeDto);
     } catch (e) {
       console.error(JSON.stringify(e));
     }
-  }
+  };
+
+  private convertTransactionSchemeToDto = (transaction: TransactionScheme) => {
+    const tableMataData = this.getTableMetaData(transaction.TableName);
+    return {
+      id: transaction.Id,
+      entityFullName: tableMataData.entityFullName,
+      assemblyName: tableMataData.assemblyName,
+      changes: transaction.Changes,
+      changeType: transaction.ChangeType as any,
+      creationDate: transaction.CreationDate,
+      instanceId: transaction.InstanceId,
+      tableName: transaction.TableName,
+      syncDate: transaction.SyncDate ?? null,
+    };
+  };
+
+  public getTableMetaData = (
+    tableName: string
+  ): Pick<TransactionDto, 'entityFullName' | 'assemblyName'> => {
+    const tableScheme = this.dbSchemeDto?.tables[tableName];
+    if (!tableScheme) return {} as any;
+
+    return {
+      assemblyName: tableScheme.assemblyName,
+      entityFullName: tableScheme.entityFullName,
+    };
+  };
 
   public open = async () => {
     await this.loadingPromise;
@@ -55,6 +149,22 @@ export class RealmService {
       path: 'realmDb.snapshot',
     });
     return { realm, snapshotRealm };
+  };
+
+  private initializeTransactionsSync = async () => {
+    const { realm } = await this.open();
+    this.transactionsRealm = realm;
+    const transactions = realm
+      .objects<TransactionScheme>(RealmService.TransactionsName)
+      .filtered('isSynced == false');
+
+    this.throttledTransactionsSend([...transactions]);
+
+    transactions.addListener((_, changes) => {
+      if (!changes.insertions.length) return;
+
+      this.throttledTransactionsSend([...transactions]);
+    });
   };
 
   private getDbScheme = (dbScheme: DbSchemeDto): Realm.ObjectSchema[] => {

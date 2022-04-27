@@ -1,6 +1,6 @@
 import * as signalR from '@microsoft/signalr';
 import { HubConnectionState, LogLevel } from '@microsoft/signalr';
-import { getAxiosFactory } from 'services/api/api-client';
+import { getAxiosFactory, ITransactionDto } from 'services/api/api-client';
 
 export class TransportService {
   protected _connection: signalR.HubConnection;
@@ -20,7 +20,7 @@ export class TransportService {
     this._connection = new signalR.HubConnectionBuilder()
       .withAutomaticReconnect()
       .configureLogging(LogLevel.Information)
-      .withUrl(axios?.defaults.baseURL ?? '' + path)
+      .withUrl((axios?.defaults.baseURL ?? '') + path)
       .build();
     this._connection.on('test', this.onTest);
     this._connection.onclose(this.onClose);
@@ -62,6 +62,11 @@ export class TransportService {
   public invokeTest = async <T>(message: string): Promise<T> => {
     await this.openConnectionIfNeeded();
     return await this._connection.invoke<T>('Send', message);
+  };
+
+  public invokeTransactions = async (transactions: ITransactionDto[]) => {
+    await this.openConnectionIfNeeded();
+    return await this._connection.invoke<string[]>('SyncTransactions', transactions);
   };
 
   public sendTest = async (message: string): Promise<void> => {
