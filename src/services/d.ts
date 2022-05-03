@@ -1,5 +1,5 @@
 // There could be defined only needed attributes
-import { ChangeType } from 'services/api/api-client';
+import { ITransactionDto } from 'services/api/api-client';
 
 export type TableSchemeConfig = {
   properties: Record<string, boolean>;
@@ -35,4 +35,7 @@ export type TransactionScheme = {
   InstanceId: string;
   SyncDate?: Date;
   TableName: string;
+};
+export type ITransactionNumberDto = Omit<ITransactionDto, 'changeType'> & {
+  changeType: ChangeTypeNumber;
 };

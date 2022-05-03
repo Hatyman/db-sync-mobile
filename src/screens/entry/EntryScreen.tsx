@@ -1,4 +1,4 @@
-import React, { FC, useEffect } from 'react';
+import React, { FC } from 'react';
 import {
   Button,
   SafeAreaView,
@@ -20,11 +20,35 @@ import { Section } from 'components/Section';
 import { getRealmService, useRealmData, useTransactions } from 'utils/realm-utils';
 import { DataRow } from 'components/DataRow';
 import { RealmService } from 'services/RealmService';
-import { HubConnectionState } from '@microsoft/signalr';
+import { addHours, format } from 'date-fns';
+
+enum ProductType {
+  Undefined,
+  Auto,
+  Electronic,
+  Other,
+}
 
 type BoxesScheme = {
   Id: string;
   IsFull: boolean;
+};
+type SalesScheme = {
+  Id: string;
+  DateTime: Date;
+  OptionalDateTime?: Date | null;
+};
+type ProductsScheme = {
+  Id: string;
+  BoxId: string | null;
+  Boxes: BoxesScheme | null;
+  LastStockUpdatedAt: Date;
+  PriceDouble: number;
+  PriceFloat: number;
+  ProductType: ProductType;
+  SaleId: string | null;
+  Sales: SalesScheme | null;
+  Title: string | null;
 };
 
 export const EntryScreen: FC = function EntryScreen() {
@@ -32,6 +56,16 @@ export const EntryScreen: FC = function EntryScreen() {
   const { data, realm, snapshotRealm } = useRealmData<BoxesScheme>({
     type: 'Boxes',
   });
+  const {
+    data: sales,
+    realm: anotherRealm,
+    snapshotRealm: anotherSnapshotRealm,
+  } = useRealmData<SalesScheme>({
+    type: 'Sales',
+  });
+  // const { data: products } = useRealmData<ProductsScheme>({
+  //   type: 'Products',
+  // });
   const transactions = useTransactions();
 
   const backgroundStyle = {
@@ -60,6 +94,15 @@ export const EntryScreen: FC = function EntryScreen() {
             }}
           />
           <Button
+            title={'Call send transactions'}
+            color={'#d5b350'}
+            onPress={() => {
+              getRealmService()
+                .transportService.sendFakeTransactions()
+                .catch(e => console.log('e', e));
+            }}
+          />
+          <Button
             title={'Add box'}
             onPress={() => {
               realm?.write(() => {
@@ -71,44 +114,63 @@ export const EntryScreen: FC = function EntryScreen() {
                 });
               });
             }}
+            color={'steelblue'}
           />
-          {data.map((box, index) => (
-            <DataRow
-              key={box.Id}
-              onPress={() => {
-                realm?.write(() => {
-                  box.IsFull = !box.IsFull;
+          <Button
+            title={'Add sale'}
+            onPress={() => {
+              realm?.write(() => {
+                const Id = RealmService.getNewId();
+                console.log('new sale Id', Id);
+                realm?.create<SalesScheme>('Sales', {
+                  Id,
+                  DateTime: new Date(),
+                  OptionalDateTime: addHours(new Date(), 3),
                 });
-              }}
-              onLongPress={() => {
-                realm?.write(() => {
-                  realm?.delete(box);
-                });
-              }}
-            >
-              <Text adjustsFontSizeToFit={true}>{index}</Text>
-              <Text adjustsFontSizeToFit={true}>{box.Id}</Text>
-              <Text adjustsFontSizeToFit={true}>{String(box.IsFull)}</Text>
-            </DataRow>
-          ))}
-          <Section title="Step One">
-            Edit <Text style={ownStyles.highlight}>App.tsx</Text> to change this screen and then
-            come back to see your edits.
+              });
+            }}
+          />
+
+          <Section title="Products">
+            {data.map((box, index) => (
+              <DataRow
+                key={box.Id}
+                onPress={() => {
+                  realm?.write(() => {
+                    box.IsFull = !box.IsFull;
+                  });
+                }}
+                onLongPress={() => {
+                  realm?.write(() => {
+                    realm?.delete(box);
+                  });
+                }}
+              >
+                <Text adjustsFontSizeToFit={true}>{index}</Text>
+                <Text adjustsFontSizeToFit={true}>{box.Id}</Text>
+                <Text adjustsFontSizeToFit={true}>{String(box.IsFull)}</Text>
+              </DataRow>
+            ))}
           </Section>
-          {transactions.map((transaction, index) => (
-            <DataRow key={transaction.Id}>
-              <Text adjustsFontSizeToFit={true}>{index}</Text>
-              <Text adjustsFontSizeToFit={true}>{JSON.stringify(transaction.toJSON())}</Text>
-            </DataRow>
-          ))}
-          <Section title="See Your Changes">
-            <ReloadInstructions />
+
+          <Section title="Sales">
+            {sales.map((sale, index) => (
+              <DataRow key={sale.Id}>
+                <Text adjustsFontSizeToFit={true}>{index}</Text>
+                <Text adjustsFontSizeToFit={true}>{sale.Id}</Text>
+                <Text adjustsFontSizeToFit={true}>{format(sale.DateTime, 'pp')}</Text>
+              </DataRow>
+            ))}
           </Section>
-          <Section title="Debug">
-            <DebugInstructions />
+
+          <Section title="Transactions">
+            {transactions.map((transaction, index) => (
+              <DataRow key={transaction.Id}>
+                <Text adjustsFontSizeToFit={true}>{index}</Text>
+                <Text adjustsFontSizeToFit={true}>{JSON.stringify(transaction.toJSON())}</Text>
+              </DataRow>
+            ))}
           </Section>
-          <Section title="Learn More">Read the docs to discover what to do next:</Section>
-          <LearnMoreLinks />
         </View>
       </ScrollView>
     </SafeAreaView>

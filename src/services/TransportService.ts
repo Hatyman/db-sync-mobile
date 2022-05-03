@@ -1,6 +1,14 @@
 import * as signalR from '@microsoft/signalr';
 import { HubConnectionState, LogLevel } from '@microsoft/signalr';
 import { getAxiosFactory, ITransactionDto } from 'services/api/api-client';
+import { ITransactionNumberDto } from 'services/d';
+
+export type TransactionsReceivedCallback = (transactions: ITransactionNumberDto[]) => void;
+
+type TransportServiceProps = {
+  path?: string;
+  onTransactionsReceived: TransactionsReceivedCallback;
+};
 
 export class TransportService {
   protected _connection: signalR.HubConnection;
@@ -14,7 +22,7 @@ export class TransportService {
     return this._connection.connectionId;
   }
 
-  constructor(path: string = '/transactions-sync') {
+  constructor({ path = '/transactions-sync', onTransactionsReceived }: TransportServiceProps) {
     const getAxios = getAxiosFactory();
     const axios = getAxios();
     this._connection = new signalR.HubConnectionBuilder()
@@ -23,6 +31,7 @@ export class TransportService {
       .withUrl((axios?.defaults.baseURL ?? '') + path)
       .build();
     this._connection.on('test', this.onTest);
+    this._connection.on('client-received', onTransactionsReceived);
     this._connection.onclose(this.onClose);
     this._connection.onreconnecting(this.onReconnecting);
     this._connection.onreconnected(this.onReconnected);
@@ -62,6 +71,11 @@ export class TransportService {
   public invokeTest = async <T>(message: string): Promise<T> => {
     await this.openConnectionIfNeeded();
     return await this._connection.invoke<T>('Send', message);
+  };
+
+  public sendFakeTransactions = async (): Promise<void> => {
+    await this.openConnectionIfNeeded();
+    return this._connection.send('SendFakeTransactions');
   };
 
   public invokeTransactions = async (transactions: ITransactionDto[]) => {

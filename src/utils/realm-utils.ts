@@ -2,6 +2,7 @@ import { RealmService } from 'services/RealmService';
 import { useEffect, useRef, useState } from 'react';
 import Realm, { UpdateMode } from 'realm';
 import { ChangeTypeNumber, TransactionScheme } from 'services/d';
+import equal from 'fast-deep-equal';
 
 let _realmService: RealmService;
 
@@ -62,6 +63,14 @@ export function useRealmData<T extends Record<string | number, any>>({
       const isSyncEnabled = service.isTableSyncEnabled(type);
       try {
         dataReference.addListener((currentData, changes) => {
+          if (
+            !changes.insertions.length &&
+            !changes.deletions.length &&
+            !changes.newModifications.length
+          ) {
+            return;
+          }
+
           const creationDate = new Date();
 
           if (!isDataUpdateDisabled) {
@@ -71,35 +80,66 @@ export function useRealmData<T extends Record<string | number, any>>({
 
           if (!isSyncEnabled) return;
 
-          snapshotRealm.write(() => {
+          service.safeWriteForRealm(snapshotRealm, () => {
             service.safeWrite(() => {
-              // Handle deleted Dog objects
-              changes.deletions.forEach(index => {
+              const typeTransactions = service.appliedTransactions[type];
+
+              // Handle deleted objects
+              for (const indexIsBeingDeleted of changes.deletions) {
                 // You cannot directly access deleted objects,
-                // but you can update a UI list, etc. based on the index.
-                console.log('Deleted index', index);
-                const snapshotDeletedItem = snapshotReference[index];
+                // but you can update a UI list, etc. based on the indexToBeDeleted.
+                console.log('Deleted index', indexIsBeingDeleted);
+                const snapshotDeletedItem = snapshotReference[indexIsBeingDeleted];
                 console.log('Deleted  data', snapshotDeletedItem);
+
+                const deletedItemId = snapshotDeletedItem[primaryKeyName];
+                const instanceTransactions =
+                  typeTransactions?.[ChangeTypeNumber.Delete]?.get(deletedItemId);
+
+                // We delete item there to keep its data for finding applied transaction
+                snapshotRealm.delete(snapshotDeletedItem);
+
+                if (instanceTransactions?.length) {
+                  if (instanceTransactions.length === 1) {
+                    typeTransactions![ChangeTypeNumber.Delete]!.delete(deletedItemId);
+                  } else {
+                    instanceTransactions.shift();
+                  }
+                  continue;
+                }
+
                 try {
                   realm.create<TransactionScheme>(RealmService.TransactionsName, {
                     Id: RealmService.getNewId(),
                     ChangeType: ChangeTypeNumber.Delete,
                     isSynced: false,
-                    InstanceId: snapshotDeletedItem[primaryKeyName],
+                    InstanceId: deletedItemId,
                     CreationDate: creationDate,
                     TableName: type,
                   });
                 } catch (e) {
-                  console.error('Error on delete', e);
-                } finally {
-                  snapshotRealm.delete(snapshotDeletedItem);
+                  console.error('Error on delete transaction creation', e);
                 }
-              });
+              }
+
               // Handle newly added Dog objects
-              changes.insertions.forEach(index => {
-                const insertedObject = currentData[index];
+              for (const indexIsBeingInserted of changes.insertions) {
+                const insertedObject = currentData[indexIsBeingInserted];
                 console.log('Inserted', insertedObject);
-                console.log('InstanceId', insertedObject[primaryKeyName]);
+                const insertedItemId = insertedObject[primaryKeyName];
+                console.log('InstanceId', insertedItemId);
+                snapshotRealm.create(type, insertedObject);
+
+                const instanceTransactions =
+                  typeTransactions?.[ChangeTypeNumber.Insert]?.get(insertedItemId);
+                if (instanceTransactions?.length) {
+                  if (instanceTransactions.length === 1) {
+                    typeTransactions![ChangeTypeNumber.Insert]!.delete(insertedItemId);
+                  } else {
+                    instanceTransactions.shift();
+                  }
+                  continue;
+                }
 
                 const content = {} as Record<string, any>;
 
@@ -114,21 +154,23 @@ export function useRealmData<T extends Record<string | number, any>>({
                     Id: RealmService.getNewId(),
                     ChangeType: ChangeTypeNumber.Insert,
                     isSynced: false,
-                    InstanceId: insertedObject[primaryKeyName],
+                    InstanceId: insertedItemId,
                     CreationDate: creationDate,
                     Changes: content,
                     TableName: type,
                   });
                 } catch (e) {
-                  console.error('Error on creation', e);
-                } finally {
-                  snapshotRealm.create(type, insertedObject);
+                  console.error('Error on insert transaction creation', e);
                 }
-              });
+              }
+
               // Handle Dog objects that were modified
-              changes.oldModifications.forEach((index, i) => {
-                const afterModifications = currentData[changes.newModifications[i]];
-                const beforeModifications = snapshotReference[index];
+              for (let i = 0; i < changes.oldModifications.length; i++) {
+                const oldIndexIsBeingModified = changes.oldModifications[i];
+                const newIndexIsBeingModified = changes.newModifications[i];
+
+                const beforeModifications = snapshotReference[oldIndexIsBeingModified];
+                const afterModifications = currentData[newIndexIsBeingModified];
                 console.log('Modified from', beforeModifications);
                 console.log('Modified   to', afterModifications);
 
@@ -137,39 +179,64 @@ export function useRealmData<T extends Record<string | number, any>>({
                 for (const attribute of attributes) {
                   const attributeSnapshot = beforeModifications[attribute];
                   const currentAttribute = afterModifications[attribute];
+
                   if (
-                    attributeSnapshot !== currentAttribute &&
+                    !equal(attributeSnapshot, currentAttribute) &&
                     service.isDbAttribute(type, attribute) &&
                     service.isPropertySyncEnabled(type, attribute, isSyncEnabled)
                   ) {
-                    changeSet[attribute] = currentAttribute ?? null;
+                    changeSet[attribute] =
+                      currentAttribute instanceof Date
+                        ? currentAttribute.toISOString()
+                        : currentAttribute ?? null;
                   }
                 }
 
-                try {
-                  if (Object.values(changeSet).length) {
-                    realm.create<TransactionScheme>(RealmService.TransactionsName, {
-                      Id: RealmService.getNewId(),
-                      ChangeType: ChangeTypeNumber.Update,
-                      isSynced: false,
-                      InstanceId: afterModifications[primaryKeyName],
-                      CreationDate: creationDate,
-                      TableName: type,
-                      Changes: changeSet,
-                    });
+                if (!Object.values(changeSet).length) continue;
+
+                const modifiedItemId = afterModifications[primaryKeyName];
+                const instanceTransactions =
+                  typeTransactions?.[ChangeTypeNumber.Update]?.get(modifiedItemId);
+                const appliedTransaction = instanceTransactions?.find(x =>
+                  equal(x.changes, changeSet)
+                );
+
+                // We do it there to keep data difference to find appliedTransaction and get proper changeSet
+                snapshotRealm.create(type, afterModifications, UpdateMode.Modified);
+
+                if (appliedTransaction) {
+                  if (instanceTransactions!.length === 1) {
+                    typeTransactions![ChangeTypeNumber.Update]!.delete(modifiedItemId);
+                  } else {
+                    typeTransactions![ChangeTypeNumber.Update]!.set(
+                      modifiedItemId,
+                      instanceTransactions!.filter(x => x.id !== appliedTransaction.id)
+                    );
                   }
-                } catch (e) {
-                  console.log('Error on modifying', e);
-                } finally {
-                  snapshotRealm.create(type, afterModifications, UpdateMode.Modified);
+                  continue;
                 }
-              });
+
+                try {
+                  realm.create<TransactionScheme>(RealmService.TransactionsName, {
+                    Id: RealmService.getNewId(),
+                    ChangeType: ChangeTypeNumber.Update,
+                    isSynced: false,
+                    InstanceId: modifiedItemId,
+                    CreationDate: creationDate,
+                    TableName: type,
+                    Changes: changeSet,
+                  });
+                } catch (e) {
+                  console.log('Error on modified transaction creation', e);
+                }
+              }
             });
           });
           console.log(
             '-------------------------------------------------------------------------------------'
           );
         });
+        service.registerTypeListener(type);
       } catch (error) {
         console.error(
           `Unable to update the tasks' state, an exception was thrown within the change listener: ${error}`
@@ -177,6 +244,7 @@ export function useRealmData<T extends Record<string | number, any>>({
       }
 
       return () => {
+        service.usRegisterTypeListener(type);
         dataReference.removeAllListeners();
         realmRef.current = null;
         realmSnapshotTempRef.current = null;

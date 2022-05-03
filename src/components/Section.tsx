@@ -18,16 +18,7 @@ export const Section: React.FC<{
       >
         {title}
       </Text>
-      <Text
-        style={[
-          ownStyles.sectionDescription,
-          {
-            color: isDarkMode ? Colors.light : Colors.dark,
-          },
-        ]}
-      >
-        {children}
-      </Text>
+      {children}
     </View>
   );
 };
@@ -35,7 +26,7 @@ export const Section: React.FC<{
 const ownStyles = StyleSheet.create({
   sectionContainer: {
     marginTop: 32,
-    paddingHorizontal: 24,
+    marginHorizontal: 10,
   },
   sectionTitle: {
     fontSize: 24,

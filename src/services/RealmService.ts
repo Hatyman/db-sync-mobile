@@ -1,4 +1,4 @@
-import Realm, { BSON } from 'realm';
+import Realm, { BSON, UpdateMode } from 'realm';
 import {
   AttributeDto,
   ConnectionSchemeDto,
@@ -11,14 +11,27 @@ import {
   TransactionDto,
 } from 'services/api/api-client';
 import { getTextWithLowerFirstLetter } from 'utils/text-utils';
-import { ConnectionTypeEnum, DbSchemeConfig, TransactionScheme } from 'services/d';
-import { TransportService } from 'services/TransportService';
+import {
+  ChangeTypeNumber,
+  ConnectionTypeEnum,
+  DbSchemeConfig,
+  ITransactionNumberDto,
+  TransactionScheme,
+} from 'services/d';
+import { TransactionsReceivedCallback, TransportService } from 'services/TransportService';
 import throttle from 'lodash.throttle';
 import { DebouncedFunc } from 'lodash';
+
+type AppliedChangeTypeTransactions = Map<string, ITransactionNumberDto[]>;
+type AppliedTypeTransactions = Record<ChangeTypeNumber, AppliedChangeTypeTransactions | undefined>;
+type AppliedTransactions = Record<string, AppliedTypeTransactions | undefined>;
 
 export class RealmService {
   public readonly schemeConfig: DbSchemeConfig | undefined;
   public dbSchemeDto: DbSchemeDto | undefined;
+
+  protected readonly registeredTypeListeners: Record<string, boolean> = {};
+  public readonly appliedTransactions: AppliedTransactions = {};
 
   public transportService: TransportService;
 
@@ -30,8 +43,6 @@ export class RealmService {
     (unSyncedTransactions: TransactionScheme[]) => Promise<void>
   >;
 
-  private unSyncedTransactions: TransactionScheme[] = [];
-
   private transactionsRealm: Realm | null = null;
 
   private _schemas: Realm.ObjectSchema[] = [];
@@ -42,7 +53,10 @@ export class RealmService {
   constructor(schemeConfig?: DbSchemeConfig, syncPath?: string) {
     this.schemeConfig = schemeConfig;
     this.loadingPromise = this.loadSchemas();
-    this.transportService = new TransportService(syncPath);
+    this.transportService = new TransportService({
+      path: syncPath,
+      onTransactionsReceived: this.onTransactionsReceived,
+    });
 
     // Decide whether it needs to be cancelled or not.
     this.throttledTransactionsSend = throttle(this._sendTransactions, 300);
@@ -52,6 +66,17 @@ export class RealmService {
     );
   }
 
+  public registerTypeListener = (type: string) => {
+    this.registeredTypeListeners[type] = true;
+  };
+
+  public usRegisterTypeListener = (type: string) => {
+    this.registeredTypeListeners[type] = false;
+  };
+
+  protected isTypeListenerRegistered = (type: string): boolean =>
+    Boolean(this.registeredTypeListeners[type]);
+
   public safeWrite = (func: () => void, realm?: Realm) => {
     if (!this.transactionsRealm && realm) {
       this.transactionsRealm = realm;
@@ -59,11 +84,17 @@ export class RealmService {
       throw new Error('Realm is not opened');
     }
 
-    if (this.transactionsRealm!.isInTransaction) {
+    const properRealm = realm ?? this.transactionsRealm;
+
+    if (properRealm?.isInTransaction) {
       func();
     } else {
-      this.transactionsRealm!.write(func);
+      properRealm?.write(func);
     }
+  };
+
+  public safeWriteForRealm = (realm: Realm, func: () => void) => {
+    this.safeWrite(func, realm);
   };
 
   private _sendTransactions = async (unSyncedTransactions: TransactionScheme[]) => {
@@ -104,6 +135,7 @@ export class RealmService {
     try {
       this.dbSchemeDto = await DbSchemeQuery.Client.getTableScheme();
       this._schemas = this.getDbScheme(this.dbSchemeDto);
+      console.log('this._schemas', this._schemas);
     } catch (e) {
       console.error(JSON.stringify(e));
     }
@@ -138,7 +170,6 @@ export class RealmService {
 
   public open = async () => {
     await this.loadingPromise;
-    console.log('this._schemas', this._schemas);
     const realm = await Realm.open({
       schema: this._schemas,
       path: 'realmDb',
@@ -147,6 +178,7 @@ export class RealmService {
     const snapshotRealm = await Realm.open({
       schema: this._schemas.filter(x => x.name !== RealmService.TransactionsName),
       path: 'realmDb.snapshot',
+      deleteRealmIfMigrationNeeded: true,
     });
     return { realm, snapshotRealm };
   };
@@ -156,7 +188,8 @@ export class RealmService {
     this.transactionsRealm = realm;
     const transactions = realm
       .objects<TransactionScheme>(RealmService.TransactionsName)
-      .filtered('isSynced == false');
+      .filtered('isSynced == false')
+      .sorted('CreationDate');
 
     this.throttledTransactionsSend([...transactions]);
 
@@ -164,6 +197,76 @@ export class RealmService {
       if (!changes.insertions.length) return;
 
       this.throttledTransactionsSend([...transactions]);
+    });
+  };
+
+  private onTransactionsReceived: TransactionsReceivedCallback = transactions => {
+    this.safeWrite(() => {
+      const syncDate = new Date();
+      for (const transaction of transactions) {
+        console.log('received transaction', transaction);
+
+        const realm = this.transactionsRealm!;
+
+        switch (transaction.changeType) {
+          case ChangeTypeNumber.Delete:
+            const itemToBeDeleted = realm.objectForPrimaryKey(
+              transaction.tableName,
+              transaction.instanceId
+            );
+            realm.delete(itemToBeDeleted);
+            break;
+
+          case ChangeTypeNumber.Insert:
+            realm.create(transaction.tableName, transaction.changes!);
+            break;
+
+          case ChangeTypeNumber.Update:
+            const itemToBeModified = realm.objectForPrimaryKey<Record<string, any>>(
+              transaction.tableName,
+              transaction.instanceId
+            );
+
+            // todo: handle corner case error
+            if (!itemToBeModified) break;
+
+            Object.assign(itemToBeModified, transaction.changes);
+            break;
+        }
+        realm.create<TransactionScheme>('Transactions', {
+          Id: transaction.id,
+          Changes: transaction.changes,
+          ChangeType: transaction.changeType,
+          CreationDate: transaction.creationDate,
+          TableName: transaction.tableName,
+          InstanceId: transaction.instanceId,
+          SyncDate: syncDate,
+          isSynced: true,
+        });
+
+        if (!this.isTypeListenerRegistered(transaction.tableName)) continue;
+
+        let typeTransactions: AppliedTypeTransactions | undefined =
+          this.appliedTransactions[transaction.tableName];
+        if (!typeTransactions) {
+          typeTransactions = {} as AppliedTypeTransactions;
+          this.appliedTransactions[transaction.tableName] = typeTransactions;
+        }
+
+        let changeTypeTransactions: AppliedChangeTypeTransactions | undefined =
+          typeTransactions[transaction.changeType];
+        if (!changeTypeTransactions) {
+          changeTypeTransactions = new Map<string, ITransactionNumberDto[]>();
+          typeTransactions[transaction.changeType] = changeTypeTransactions;
+        }
+
+        const instanceTransactions = changeTypeTransactions.get(transaction.instanceId);
+        if (!instanceTransactions) {
+          changeTypeTransactions.set(transaction.instanceId, [transaction]);
+        } else {
+          instanceTransactions.push(transaction);
+        }
+      }
     });
   };
 

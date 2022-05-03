@@ -16,6 +16,7 @@ import axios from 'axios';
 import { RealmService } from 'services/RealmService';
 import { setRealmService } from 'utils/realm-utils';
 import { schemeConfig } from 'services/scheme-config';
+import { StatusBar, useColorScheme } from 'react-native';
 
 const backendAxios = axios.create({
   baseURL: 'http://192.168.101.210:48903',
@@ -33,10 +34,15 @@ const queryClient = new QueryClient({
 });
 
 const App = () => {
+  const isDarkMode = useColorScheme() === 'dark';
   const realmService = new RealmService(schemeConfig);
   setRealmService(realmService);
   return (
     <QueryClientProvider client={queryClient}>
+      <StatusBar
+        barStyle={isDarkMode ? 'dark-content' : 'light-content'}
+        backgroundColor={isDarkMode ? '#333' : '#eee'}
+      />
       <EntryScreen />
     </QueryClientProvider>
   );

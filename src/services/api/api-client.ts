@@ -746,14 +746,21 @@ export class DbSchemeClient {
     return Promise.resolve<DbSchemeDto>(null as any);
   }
 
-  getTransactions(cancelToken?: CancelToken | undefined): Promise<TransactionDto> {
+  getTransactions(
+    _dto: TransactionDto,
+    cancelToken?: CancelToken | undefined
+  ): Promise<TransactionDto> {
     let url_ = this.baseUrl + '/api/scheme/transactions';
     url_ = url_.replace(/[?&]$/, '');
 
+    const content_ = JSON.stringify(_dto);
+
     let options_ = <AxiosRequestConfig>{
-      method: 'GET',
+      data: content_,
+      method: 'POST',
       url: url_,
       headers: {
+        'Content-Type': 'application/json',
         Accept: 'application/json',
       },
       cancelToken,
@@ -874,59 +881,6 @@ export class DbSchemeQuery {
     queryClient: QueryClient,
     queryKey: QueryKey,
     updater: (data: DbSchemeDto | undefined) => DbSchemeDto
-  ) {
-    queryClient.setQueryData(queryKey, updater);
-  }
-
-  getTransactions(): string {
-    let url_ = this.baseUrl + '/api/scheme/transactions';
-    url_ = url_.replace(/[?&]$/, '');
-    return url_;
-  }
-
-  static getTransactionsDefaultOptions?: UseQueryOptions<TransactionDto, unknown, TransactionDto> =
-    {};
-  public static getTransactionsQueryKey(): QueryKey;
-  public static getTransactionsQueryKey(...params: any[]): QueryKey {
-    return removeUndefinedFromArrayTail(['DbSchemeClient', 'getTransactions']);
-  }
-
-  private static getTransactions() {
-    return DbSchemeQuery.Client.getTransactions();
-  }
-
-  static useGetTransactionsQuery<TSelectData = TransactionDto, TError = unknown>(
-    options?: UseQueryOptions<TransactionDto, TError, TSelectData>
-  ): UseQueryResult<TSelectData, TError>;
-  static useGetTransactionsQuery<TSelectData = TransactionDto, TError = unknown>(
-    ...params: any[]
-  ): UseQueryResult<TSelectData, TError> {
-    let options: UseQueryOptions<TransactionDto, TError, TSelectData> | undefined = undefined;
-
-    options = params[0] as any;
-
-    return useQuery<TransactionDto, TError, TSelectData>({
-      queryFn: DbSchemeQuery.getTransactions,
-      queryKey: DbSchemeQuery.getTransactionsQueryKey(),
-      ...(DbSchemeQuery.getTransactionsDefaultOptions as unknown as UseQueryOptions<
-        TransactionDto,
-        TError,
-        TSelectData
-      >),
-      ...options,
-    });
-  }
-  static setGetTransactionsData(
-    queryClient: QueryClient,
-    updater: (data: TransactionDto | undefined) => TransactionDto
-  ) {
-    queryClient.setQueryData(DbSchemeQuery.getTransactionsQueryKey(), updater);
-  }
-
-  static setGetTransactionsDataByQueryId(
-    queryClient: QueryClient,
-    queryKey: QueryKey,
-    updater: (data: TransactionDto | undefined) => TransactionDto
   ) {
     queryClient.setQueryData(queryKey, updater);
   }
