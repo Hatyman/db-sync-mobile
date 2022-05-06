@@ -1,4 +1,4 @@
-import Realm, { BSON, UpdateMode } from 'realm';
+import Realm from 'realm';
 import {
   AttributeDto,
   ConnectionSchemeDto,
@@ -26,6 +26,11 @@ type AppliedChangeTypeTransactions = Map<string, ITransactionNumberDto[]>;
 type AppliedTypeTransactions = Record<ChangeTypeNumber, AppliedChangeTypeTransactions | undefined>;
 type AppliedTransactions = Record<string, AppliedTypeTransactions | undefined>;
 
+type LastSyncTransactionScheme = {
+  Id: number;
+  TransactionId: string;
+};
+
 export class RealmService {
   public readonly schemeConfig: DbSchemeConfig | undefined;
   public dbSchemeDto: DbSchemeDto | undefined;
@@ -33,7 +38,7 @@ export class RealmService {
   protected readonly registeredTypeListeners: Record<string, boolean> = {};
   public readonly appliedTransactions: AppliedTransactions = {};
 
-  public transportService: TransportService;
+  public transportService: TransportService | null = null;
 
   public static readonly TransactionsName = 'Transactions';
 
@@ -45,18 +50,40 @@ export class RealmService {
 
   private transactionsRealm: Realm | null = null;
 
-  private _schemas: Realm.ObjectSchema[] = [];
+  private static lastSyncTransactionKey = 0;
+  private static lastSyncTransactionScheme: Realm.ObjectSchema = {
+    name: 'lastSyncTransaction',
+    primaryKey: 'Id',
+    properties: {
+      Id: 'int',
+      TransactionId: 'string',
+    },
+  };
+
+  private _schemas: Realm.ObjectSchema[] = [RealmService.lastSyncTransactionScheme];
+
   public get schemas() {
     return this._schemas;
   }
 
   constructor(schemeConfig?: DbSchemeConfig, syncPath?: string) {
     this.schemeConfig = schemeConfig;
-    this.loadingPromise = this.loadSchemas();
-    this.transportService = new TransportService({
-      path: syncPath,
-      onTransactionsReceived: this.onTransactionsReceived,
-    });
+    this.loadingPromise = (async () => {
+      const realm = await this.open();
+      realm.snapshotRealm.close();
+      const lastSyncTransaction = realm.realm.objectForPrimaryKey<LastSyncTransactionScheme>(
+        RealmService.lastSyncTransactionScheme.name,
+        RealmService.lastSyncTransactionKey
+      );
+      const lastSyncTransactionId = lastSyncTransaction?.TransactionId;
+      realm.realm.close();
+      this.transportService = new TransportService({
+        path: syncPath,
+        onTransactionsReceived: this.onTransactionsReceived,
+        lastSyncTransactionId,
+      });
+      await this.loadSchemas();
+    })();
 
     // Decide whether it needs to be cancelled or not.
     this.throttledTransactionsSend = throttle(this._sendTransactions, 300);
@@ -98,6 +125,10 @@ export class RealmService {
   };
 
   private _sendTransactions = async (unSyncedTransactions: TransactionScheme[]) => {
+    if (!this.transportService) {
+      return this.throttledTransactionsSend(unSyncedTransactions);
+    }
+
     const requestData: ITransactionDto[] = unSyncedTransactions
       .slice(0, 30)
       .map(this.convertTransactionSchemeToDto);
@@ -106,6 +137,8 @@ export class RealmService {
     if (unSyncedTransactions.length > 30) {
       this.throttledTransactionsSend(unSyncedTransactions.slice(30));
     }
+
+    if (!syncedTransactionsIds.length) return;
 
     if (!this.transactionsRealm) {
       const { realm } = await this.open();
@@ -124,9 +157,17 @@ export class RealmService {
           throw new Error('There is no such transaction!');
         }
 
-        transaction.isSynced = true;
-        transaction.SyncDate = syncDate;
+        this.transactionsRealm?.delete(transaction);
       }
+
+      this.transactionsRealm?.create<LastSyncTransactionScheme>(
+        RealmService.lastSyncTransactionScheme.name,
+        {
+          Id: RealmService.lastSyncTransactionKey,
+          TransactionId: syncedTransactionsIds[syncedTransactionsIds.length - 1],
+        },
+        Realm.UpdateMode.Modified
+      );
     });
     console.log('syncedTransactionsIds', syncedTransactionsIds);
   };
@@ -188,7 +229,6 @@ export class RealmService {
     this.transactionsRealm = realm;
     const transactions = realm
       .objects<TransactionScheme>(RealmService.TransactionsName)
-      .filtered('isSynced == false')
       .sorted('CreationDate');
 
     this.throttledTransactionsSend([...transactions]);
@@ -201,8 +241,11 @@ export class RealmService {
   };
 
   private onTransactionsReceived: TransactionsReceivedCallback = transactions => {
+    console.log('received from hub', transactions);
+
     this.safeWrite(() => {
-      const syncDate = new Date();
+      let lastSyncTransactionId: string | null = null;
+
       for (const transaction of transactions) {
         console.log('received transaction', transaction);
 
@@ -233,16 +276,8 @@ export class RealmService {
             Object.assign(itemToBeModified, transaction.changes);
             break;
         }
-        realm.create<TransactionScheme>('Transactions', {
-          Id: transaction.id,
-          Changes: transaction.changes,
-          ChangeType: transaction.changeType,
-          CreationDate: transaction.creationDate,
-          TableName: transaction.tableName,
-          InstanceId: transaction.instanceId,
-          SyncDate: syncDate,
-          isSynced: true,
-        });
+
+        lastSyncTransactionId = transaction.id;
 
         if (!this.isTypeListenerRegistered(transaction.tableName)) continue;
 
@@ -267,11 +302,22 @@ export class RealmService {
           instanceTransactions.push(transaction);
         }
       }
+
+      if (!lastSyncTransactionId) return;
+
+      this.transactionsRealm?.create<LastSyncTransactionScheme>(
+        RealmService.lastSyncTransactionScheme.name,
+        {
+          Id: RealmService.lastSyncTransactionKey,
+          TransactionId: lastSyncTransactionId,
+        },
+        Realm.UpdateMode.Modified
+      );
     });
   };
 
   private getDbScheme = (dbScheme: DbSchemeDto): Realm.ObjectSchema[] => {
-    const tableSchemas: Realm.ObjectSchema[] = [];
+    const tableSchemas: Realm.ObjectSchema[] = [RealmService.lastSyncTransactionScheme];
 
     for (const tableName in dbScheme.tables) {
       if (this.schemeConfig && tableName !== RealmService.TransactionsName) {
@@ -285,12 +331,6 @@ export class RealmService {
       }
       const tableScheme = dbScheme.tables[tableName];
       const properties: Realm.PropertiesTypes = {};
-
-      if (tableName === RealmService.TransactionsName) {
-        Object.assign(properties, {
-          isSynced: getTextWithLowerFirstLetter(RealmDataType.Bool),
-        });
-      }
 
       for (const attributeName in tableScheme.attributes) {
         const attribute = tableScheme.attributes[attributeName];
@@ -425,7 +465,7 @@ export class RealmService {
   };
 
   public static getNewId(): string {
-    return new BSON.UUID().toHexString();
+    return new Realm.BSON.UUID().toHexString();
   }
 
   public isTableSyncEnabled = (tableName: string): boolean => {

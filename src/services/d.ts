@@ -27,7 +27,6 @@ export enum ChangeTypeNumber {
 }
 
 export type TransactionScheme = {
-  isSynced: boolean;
   Id: string;
   ChangeType: ChangeTypeNumber;
   Changes?: Record<string, string | number | boolean | null>;

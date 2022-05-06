@@ -8,6 +8,7 @@ export type TransactionsReceivedCallback = (transactions: ITransactionNumberDto[
 type TransportServiceProps = {
   path?: string;
   onTransactionsReceived: TransactionsReceivedCallback;
+  lastSyncTransactionId?: string;
 };
 
 export class TransportService {
@@ -22,13 +23,20 @@ export class TransportService {
     return this._connection.connectionId;
   }
 
-  constructor({ path = '/transactions-sync', onTransactionsReceived }: TransportServiceProps) {
+  constructor({
+    path = '/transactions-sync',
+    onTransactionsReceived,
+    lastSyncTransactionId,
+  }: TransportServiceProps) {
     const getAxios = getAxiosFactory();
     const axios = getAxios();
+
+    const query = lastSyncTransactionId ? `?lastSyncTransactionId=${lastSyncTransactionId}` : '';
+
     this._connection = new signalR.HubConnectionBuilder()
       .withAutomaticReconnect()
       .configureLogging(LogLevel.Information)
-      .withUrl((axios?.defaults.baseURL ?? '') + path)
+      .withUrl((axios?.defaults.baseURL ?? '') + path + query)
       .build();
     this._connection.on('test', this.onTest);
     this._connection.on('client-received', onTransactionsReceived);

@@ -1,6 +1,6 @@
 import { RealmService } from 'services/RealmService';
 import { useEffect, useRef, useState } from 'react';
-import Realm, { UpdateMode } from 'realm';
+import Realm from 'realm';
 import { ChangeTypeNumber, TransactionScheme } from 'services/d';
 import equal from 'fast-deep-equal';
 
@@ -112,7 +112,6 @@ export function useRealmData<T extends Record<string | number, any>>({
                   realm.create<TransactionScheme>(RealmService.TransactionsName, {
                     Id: RealmService.getNewId(),
                     ChangeType: ChangeTypeNumber.Delete,
-                    isSynced: false,
                     InstanceId: deletedItemId,
                     CreationDate: creationDate,
                     TableName: type,
@@ -153,7 +152,6 @@ export function useRealmData<T extends Record<string | number, any>>({
                   realm.create<TransactionScheme>(RealmService.TransactionsName, {
                     Id: RealmService.getNewId(),
                     ChangeType: ChangeTypeNumber.Insert,
-                    isSynced: false,
                     InstanceId: insertedItemId,
                     CreationDate: creationDate,
                     Changes: content,
@@ -202,7 +200,7 @@ export function useRealmData<T extends Record<string | number, any>>({
                 );
 
                 // We do it there to keep data difference to find appliedTransaction and get proper changeSet
-                snapshotRealm.create(type, afterModifications, UpdateMode.Modified);
+                snapshotRealm.create(type, afterModifications, Realm.UpdateMode.Modified);
 
                 if (appliedTransaction) {
                   if (instanceTransactions!.length === 1) {
@@ -220,7 +218,6 @@ export function useRealmData<T extends Record<string | number, any>>({
                   realm.create<TransactionScheme>(RealmService.TransactionsName, {
                     Id: RealmService.getNewId(),
                     ChangeType: ChangeTypeNumber.Update,
-                    isSynced: false,
                     InstanceId: modifiedItemId,
                     CreationDate: creationDate,
                     TableName: type,
