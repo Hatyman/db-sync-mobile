@@ -6,7 +6,6 @@ import {
   DbSchemeQuery,
   IDbSchemeDto,
   ITransactionDto,
-  RealmDataType,
   TableSchemeDto,
   TransactionDto,
 } from 'services/api/api-client';
@@ -40,7 +39,7 @@ export class RealmService {
 
   public transportService: TransportService | null = null;
 
-  public static readonly TransactionsName = 'Transactions';
+  public static readonly transactionsName = 'Transactions';
 
   private readonly loadingPromise: Promise<void>;
 
@@ -48,10 +47,13 @@ export class RealmService {
     (unSyncedTransactions: TransactionScheme[]) => Promise<void>
   >;
 
-  private transactionsRealm: Realm | null = null;
+  private realm: Realm | null = null;
+  private snapshotRealm: Realm | null = null;
 
-  private static lastSyncTransactionKey = 0;
-  private static lastSyncTransactionScheme: Realm.ObjectSchema = {
+  public isReadyToSendTransactions: boolean = false;
+
+  private static readonly lastSyncTransactionKey = 0;
+  private static readonly lastSyncTransactionScheme: Realm.ObjectSchema = {
     name: 'lastSyncTransaction',
     primaryKey: 'Id',
     properties: {
@@ -69,18 +71,20 @@ export class RealmService {
   constructor(schemeConfig?: DbSchemeConfig, syncPath?: string) {
     this.schemeConfig = schemeConfig;
     this.loadingPromise = (async () => {
-      const realm = await this.open();
-      realm.snapshotRealm.close();
-      const lastSyncTransaction = realm.realm.objectForPrimaryKey<LastSyncTransactionScheme>(
+      const { realm } = await this.openIfNeeded();
+      const lastSyncTransaction = realm.objectForPrimaryKey<LastSyncTransactionScheme>(
         RealmService.lastSyncTransactionScheme.name,
         RealmService.lastSyncTransactionKey
       );
       const lastSyncTransactionId = lastSyncTransaction?.TransactionId;
-      realm.realm.close();
+      this.close();
       this.transportService = new TransportService({
         path: syncPath,
         onTransactionsReceived: this.onTransactionsReceived,
         lastSyncTransactionId,
+        onDisconnect: () => {
+          this.isReadyToSendTransactions = false;
+        },
       });
       await this.loadSchemas();
     })();
@@ -97,7 +101,7 @@ export class RealmService {
     this.registeredTypeListeners[type] = true;
   };
 
-  public usRegisterTypeListener = (type: string) => {
+  public unRegisterTypeListener = (type: string) => {
     this.registeredTypeListeners[type] = false;
   };
 
@@ -105,13 +109,11 @@ export class RealmService {
     Boolean(this.registeredTypeListeners[type]);
 
   public safeWrite = (func: () => void, realm?: Realm) => {
-    if (!this.transactionsRealm && realm) {
-      this.transactionsRealm = realm;
-    } else if (!this.transactionsRealm && !realm) {
+    if (!this.realm && !realm) {
       throw new Error('Realm is not opened');
     }
 
-    const properRealm = realm ?? this.transactionsRealm;
+    const properRealm = realm ?? this.realm;
 
     if (properRealm?.isInTransaction) {
       func();
@@ -125,7 +127,7 @@ export class RealmService {
   };
 
   private _sendTransactions = async (unSyncedTransactions: TransactionScheme[]) => {
-    if (!this.transportService) {
+    if (!this.transportService || !this.isReadyToSendTransactions) {
       return this.throttledTransactionsSend(unSyncedTransactions);
     }
 
@@ -140,27 +142,20 @@ export class RealmService {
 
     if (!syncedTransactionsIds.length) return;
 
-    if (!this.transactionsRealm) {
-      const { realm } = await this.open();
-      this.transactionsRealm = realm;
-    }
-
-    const syncDate = new Date();
+    await this.openIfNeeded();
 
     this.safeWrite(() => {
-      for (const transactionId of syncedTransactionsIds) {
-        const transaction = this.transactionsRealm?.objectForPrimaryKey<TransactionScheme>(
-          RealmService.TransactionsName,
-          transactionId
-        );
-        if (!transaction) {
-          throw new Error('There is no such transaction!');
-        }
+      const transactionsToBeDeleted = this.realm
+        ?.objects(RealmService.transactionsName)
+        .filtered(RealmService.convertArrayToFilterCondition('Id', syncedTransactionsIds));
 
-        this.transactionsRealm?.delete(transaction);
+      if (transactionsToBeDeleted?.length) {
+        this.realm?.delete(transactionsToBeDeleted);
       }
 
-      this.transactionsRealm?.create<LastSyncTransactionScheme>(
+      if (!syncedTransactionsIds.length) return;
+
+      this.realm?.create<LastSyncTransactionScheme>(
         RealmService.lastSyncTransactionScheme.name,
         {
           Id: RealmService.lastSyncTransactionKey,
@@ -209,118 +204,291 @@ export class RealmService {
     };
   };
 
-  public open = async () => {
+  /**
+   * Assigns realm and snapshotRealm properties for service and returns them
+   */
+  public openIfNeeded = async () => {
     await this.loadingPromise;
-    const realm = await Realm.open({
-      schema: this._schemas,
-      path: 'realmDb',
-      deleteRealmIfMigrationNeeded: true,
-    });
-    const snapshotRealm = await Realm.open({
-      schema: this._schemas.filter(x => x.name !== RealmService.TransactionsName),
-      path: 'realmDb.snapshot',
-      deleteRealmIfMigrationNeeded: true,
-    });
-    return { realm, snapshotRealm };
+
+    if (!this.realm || this.realm.isClosed) {
+      this.realm = await Realm.open({
+        schema: this._schemas,
+        path: 'realmDb',
+        deleteRealmIfMigrationNeeded: true,
+      });
+    }
+
+    if (!this.snapshotRealm || this.snapshotRealm.isClosed) {
+      this.snapshotRealm = await Realm.open({
+        schema: this._schemas.filter(
+          x =>
+            x.name !== RealmService.transactionsName &&
+            x.name !== RealmService.lastSyncTransactionScheme.name
+        ),
+        path: 'realmDb.snapshot',
+        deleteRealmIfMigrationNeeded: true,
+      });
+    }
+
+    return {
+      realm: this.realm,
+      snapshotRealm: this.snapshotRealm,
+    };
+  };
+
+  public close = () => {
+    if (this.realm) {
+      this.realm.close();
+    }
+
+    if (this.snapshotRealm) {
+      this.snapshotRealm.close();
+    }
   };
 
   private initializeTransactionsSync = async () => {
-    const { realm } = await this.open();
-    this.transactionsRealm = realm;
-    const transactions = realm
-      .objects<TransactionScheme>(RealmService.TransactionsName)
-      .sorted('CreationDate');
+    await this.openIfNeeded();
+    const transactions = this.realm!.objects<TransactionScheme>(
+      RealmService.transactionsName
+    ).sorted('CreationDate');
 
     this.throttledTransactionsSend([...transactions]);
 
     transactions.addListener((_, changes) => {
-      if (!changes.insertions.length) return;
+      if (!changes.insertions.length && !changes.newModifications.length) return;
 
       this.throttledTransactionsSend([...transactions]);
     });
   };
 
-  private onTransactionsReceived: TransactionsReceivedCallback = transactions => {
+  private onTransactionsReceived: TransactionsReceivedCallback = async transactions => {
     console.log('received from hub', transactions);
 
-    this.safeWrite(() => {
-      let lastSyncTransactionId: string | null = null;
+    await this.openIfNeeded();
 
-      for (const transaction of transactions) {
-        console.log('received transaction', transaction);
+    const realm = this.realm!;
+    const snapshotRealm = this.snapshotRealm!;
 
-        const realm = this.transactionsRealm!;
+    this.safeWriteForRealm(snapshotRealm, () =>
+      this.safeWrite(() => {
+        let lastSyncTransactionId: string | null = null;
 
-        switch (transaction.changeType) {
-          case ChangeTypeNumber.Delete:
-            const itemToBeDeleted = realm.objectForPrimaryKey(
-              transaction.tableName,
-              transaction.instanceId
-            );
-            realm.delete(itemToBeDeleted);
-            break;
+        const nowDate = new Date();
+        const deletedIds: string[] = [];
+        const insertedIds: Set<string> = new Set();
+        const modifiedPropertiesMap = new Map<string, Record<string, any>>();
 
-          case ChangeTypeNumber.Insert:
-            realm.create(transaction.tableName, transaction.changes!);
-            break;
+        for (const transaction of transactions) {
+          console.log('received transaction', transaction);
 
-          case ChangeTypeNumber.Update:
-            const itemToBeModified = realm.objectForPrimaryKey<Record<string, any>>(
-              transaction.tableName,
-              transaction.instanceId
-            );
+          switch (transaction.changeType) {
+            case ChangeTypeNumber.Delete:
+              const itemToBeDeleted = realm.objectForPrimaryKey(
+                transaction.tableName,
+                transaction.instanceId
+              );
 
-            // todo: handle corner case error
-            if (!itemToBeModified) break;
+              if (itemToBeDeleted) {
+                console.log('Deletion from hub:', itemToBeDeleted);
 
-            Object.assign(itemToBeModified, transaction.changes);
-            break;
+                realm.delete(itemToBeDeleted);
+              }
+
+              /**
+               * We avoid applying transactions for snapshot data in cases:
+               * 1 when this table is being listened in hook and allow to apply this transaction
+               * for snapshot data in this listener.
+               * Because we want to get deleted instance id to check it in applied from hub
+               * transactions map and avoid creation wrong transactions.
+               *
+               * 2 We have inserted this instance just now from hub. After this write realm transaction
+               * is finished, listener will be only triggered with only inserted notifications
+               * (and modified if instance already exists in realm DB), so inserted and then deleted
+               * at the same time won't be recorded to changes for listener, but we are already have
+               * changed snapshot, due to it, we have to keep it the same as data "for show" and
+               * apply this transaction for snapshot also even there is type listener registered.
+               *
+               * Other applyings for snapshot data are done in this function and avoided in hook.
+               */
+              if (
+                !this.isTypeListenerRegistered(transaction.tableName) ||
+                insertedIds.has(transaction.instanceId)
+              ) {
+                const snapshotToBeDeleted = snapshotRealm.objectForPrimaryKey(
+                  transaction.tableName,
+                  transaction.instanceId
+                );
+
+                if (snapshotToBeDeleted) {
+                  console.log('Deletion snapshot from hub:', snapshotToBeDeleted);
+                  snapshotRealm.delete(snapshotToBeDeleted);
+                }
+              }
+
+              deletedIds.push(transaction.instanceId);
+              break;
+
+            case ChangeTypeNumber.Insert:
+              realm.create(transaction.tableName, transaction.changes!);
+              snapshotRealm.create(transaction.tableName, transaction.changes!);
+              insertedIds.add(transaction.instanceId);
+              break;
+
+            case ChangeTypeNumber.Update:
+              const itemToBeModified = realm.objectForPrimaryKey<Record<string, any>>(
+                transaction.tableName,
+                transaction.instanceId
+              );
+              const snapshotToBeModified = snapshotRealm.objectForPrimaryKey<Record<string, any>>(
+                transaction.tableName,
+                transaction.instanceId
+              );
+
+              // todo: handle corner case error when there is no item
+              if (itemToBeModified) {
+                let instanceChanges = modifiedPropertiesMap.get(transaction.instanceId);
+                if (!instanceChanges) {
+                  instanceChanges = {};
+                  modifiedPropertiesMap.set(transaction.instanceId, instanceChanges);
+                }
+                Object.assign(instanceChanges, transaction.changes);
+
+                console.log('Before modification from hub', itemToBeModified);
+                Object.assign(itemToBeModified, transaction.changes);
+                console.log('After modification from hub', itemToBeModified);
+              } else {
+                console.warn(
+                  `Received transaction for ${transaction.tableName} instance id: ${transaction.instanceId}, but it was not found in realm DB`
+                );
+              }
+
+              if (snapshotToBeModified) {
+                Object.assign(snapshotToBeModified, transaction.changes);
+              }
+
+              break;
+          }
+
+          lastSyncTransactionId = transaction.id;
+
+          if (!this.isTypeListenerRegistered(transaction.tableName)) continue;
+
+          let typeTransactions: AppliedTypeTransactions | undefined =
+            this.appliedTransactions[transaction.tableName];
+          if (!typeTransactions) {
+            typeTransactions = {} as AppliedTypeTransactions;
+            this.appliedTransactions[transaction.tableName] = typeTransactions;
+          }
+
+          let changeTypeTransactions: AppliedChangeTypeTransactions | undefined =
+            typeTransactions[transaction.changeType];
+          if (!changeTypeTransactions) {
+            changeTypeTransactions = new Map<string, ITransactionNumberDto[]>();
+            typeTransactions[transaction.changeType] = changeTypeTransactions;
+          }
+
+          const instanceTransactions = changeTypeTransactions.get(transaction.instanceId);
+          if (!instanceTransactions) {
+            changeTypeTransactions.set(transaction.instanceId, [transaction]);
+          } else {
+            instanceTransactions.push(transaction);
+          }
         }
 
-        lastSyncTransactionId = transaction.id;
-
-        if (!this.isTypeListenerRegistered(transaction.tableName)) continue;
-
-        let typeTransactions: AppliedTypeTransactions | undefined =
-          this.appliedTransactions[transaction.tableName];
-        if (!typeTransactions) {
-          typeTransactions = {} as AppliedTypeTransactions;
-          this.appliedTransactions[transaction.tableName] = typeTransactions;
+        console.log('delete transactions for instance ids:', deletedIds);
+        if (deletedIds.length) {
+          /**
+           * We want to delete all local transactions for already deleted instance.
+           * There are only modify and delete transactions could be.
+           */
+          realm.delete(
+            realm
+              .objects<TransactionScheme>(RealmService.transactionsName)
+              .filtered(RealmService.convertArrayToFilterCondition('InstanceId', deletedIds))
+          );
         }
 
-        let changeTypeTransactions: AppliedChangeTypeTransactions | undefined =
-          typeTransactions[transaction.changeType];
-        if (!changeTypeTransactions) {
-          changeTypeTransactions = new Map<string, ITransactionNumberDto[]>();
-          typeTransactions[transaction.changeType] = changeTypeTransactions;
+        console.log('modifiedPropertiesMap', modifiedPropertiesMap);
+        if (modifiedPropertiesMap.size) {
+          const modifyTransactions = realm
+            .objects<TransactionScheme>(RealmService.transactionsName)
+            .filtered(
+              `ChangeType == $0 && (${RealmService.convertArrayToFilterCondition('InstanceId', [
+                ...modifiedPropertiesMap.keys(),
+              ])})`,
+              ChangeTypeNumber.Update
+            )
+            .sorted('CreationDate');
+
+          const changesMap = new Map<string, TransactionScheme>();
+
+          for (const modifyTransaction of modifyTransactions) {
+            let instanceSummaryTransaction = changesMap.get(modifyTransaction.InstanceId);
+
+            if (!instanceSummaryTransaction) {
+              changesMap.set(modifyTransaction.InstanceId, {
+                Id: RealmService.getNewId(),
+                ChangeType: modifyTransaction.ChangeType,
+                TableName: modifyTransaction.TableName,
+                InstanceId: modifyTransaction.InstanceId,
+                Changes: {
+                  ...modifyTransaction.Changes,
+                },
+                CreationDate: nowDate,
+              });
+            } else {
+              Object.assign(instanceSummaryTransaction.Changes, modifyTransaction.Changes);
+            }
+          }
+          console.log('delete modifyTransactions', modifyTransactions);
+          realm.delete(modifyTransactions);
+          console.log('changesMap', changesMap);
+          for (const accumulatedTransaction of changesMap.values()) {
+            const affectedProperties = modifiedPropertiesMap.get(
+              accumulatedTransaction.InstanceId
+            )!;
+
+            for (const property in accumulatedTransaction.Changes) {
+              if (!(property in affectedProperties)) continue;
+
+              delete accumulatedTransaction.Changes[property];
+            }
+
+            if (
+              !accumulatedTransaction.Changes ||
+              !Object.values(accumulatedTransaction.Changes).length
+            ) {
+              continue;
+            }
+
+            realm.create<TransactionScheme>(RealmService.transactionsName, accumulatedTransaction);
+            console.log('Added accumulated transaction', accumulatedTransaction);
+          }
         }
 
-        const instanceTransactions = changeTypeTransactions.get(transaction.instanceId);
-        if (!instanceTransactions) {
-          changeTypeTransactions.set(transaction.instanceId, [transaction]);
-        } else {
-          instanceTransactions.push(transaction);
+        if (!this.isReadyToSendTransactions) {
+          this.isReadyToSendTransactions = true;
         }
-      }
 
-      if (!lastSyncTransactionId) return;
+        if (!lastSyncTransactionId) return;
 
-      this.transactionsRealm?.create<LastSyncTransactionScheme>(
-        RealmService.lastSyncTransactionScheme.name,
-        {
-          Id: RealmService.lastSyncTransactionKey,
-          TransactionId: lastSyncTransactionId,
-        },
-        Realm.UpdateMode.Modified
-      );
-    });
+        this.realm?.create<LastSyncTransactionScheme>(
+          RealmService.lastSyncTransactionScheme.name,
+          {
+            Id: RealmService.lastSyncTransactionKey,
+            TransactionId: lastSyncTransactionId,
+          },
+          Realm.UpdateMode.Modified
+        );
+      })
+    );
   };
 
   private getDbScheme = (dbScheme: DbSchemeDto): Realm.ObjectSchema[] => {
     const tableSchemas: Realm.ObjectSchema[] = [RealmService.lastSyncTransactionScheme];
 
     for (const tableName in dbScheme.tables) {
-      if (this.schemeConfig && tableName !== RealmService.TransactionsName) {
+      if (this.schemeConfig && tableName !== RealmService.transactionsName) {
         if (Array.isArray(this.schemeConfig) && !this.schemeConfig.includes(tableName)) {
           continue;
         } else if (!Array.isArray(this.schemeConfig) && !(tableName in this.schemeConfig)) {
@@ -352,10 +520,10 @@ export class RealmService {
     return tableSchemas;
   };
 
-  private static getRelationshipProperties = (
+  private static getRelationshipProperties(
     tableScheme: TableSchemeDto,
     tables: IDbSchemeDto['tables']
-  ): Realm.PropertiesTypes => {
+  ): Realm.PropertiesTypes {
     const relationshipProperties: Realm.PropertiesTypes = {};
 
     for (const connectedTableName in tableScheme.connections) {
@@ -375,13 +543,13 @@ export class RealmService {
     }
 
     return relationshipProperties;
-  };
+  }
 
-  private static getConnectionAttributeType = (
+  private static getConnectionAttributeType(
     connectionType: ConnectionTypeEnum,
     connection: ConnectionSchemeDto,
     table: TableSchemeDto
-  ): Realm.PropertyType | Realm.ObjectSchemaProperty => {
+  ): Realm.PropertyType | Realm.ObjectSchemaProperty {
     switch (connectionType) {
       case ConnectionTypeEnum.OneToOne:
         if (connection.isIncomingReference) {
@@ -410,17 +578,17 @@ export class RealmService {
       case ConnectionTypeEnum.OneToMany:
         return `${connection.tableName}[]`;
     }
-  };
+  }
 
-  private static getConnectionFieldListName = (tableName: string): string => {
+  private static getConnectionFieldListName(tableName: string): string {
     return tableName + 'List';
-  };
+  }
 
-  private static getConnectionType = (
+  private static getConnectionType(
     connection: ConnectionSchemeDto,
     ownTable: TableSchemeDto,
     tables: IDbSchemeDto['tables']
-  ): ConnectionTypeEnum => {
+  ): ConnectionTypeEnum {
     if (connection.isIncomingReference) {
       const connectedTableAttributes = tables[connection.tableName].attributes;
       if (
@@ -441,9 +609,9 @@ export class RealmService {
     } else {
       return ConnectionTypeEnum.ManyToOne;
     }
-  };
+  }
 
-  private static getRealmType = (attribute: AttributeDto): string | Realm.ObjectSchemaProperty => {
+  private static getRealmType(attribute: AttributeDto): string | Realm.ObjectSchemaProperty {
     let type: string | Realm.ObjectSchemaProperty = '';
     if (attribute.scheme.type) {
       type = getTextWithLowerFirstLetter(attribute.scheme.type);
@@ -462,7 +630,7 @@ export class RealmService {
     }
 
     return type;
-  };
+  }
 
   public static getNewId(): string {
     return new Realm.BSON.UUID().toHexString();
@@ -500,4 +668,10 @@ export class RealmService {
         attributeName in this.dbSchemeDto.tables[tableName].attributes
     );
   };
+
+  private static convertArrayToFilterCondition(propertyName: string, array: (string | number)[]) {
+    return array
+      .reduce((accumulator: string, item) => `${accumulator} || ${propertyName} == '${item}'`, '')
+      .substring(4);
+  }
 }

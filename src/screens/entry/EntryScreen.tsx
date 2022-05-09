@@ -68,6 +68,8 @@ export const EntryScreen: FC = function EntryScreen() {
   // });
   const transactions = useTransactions();
 
+  // console.log('on render', JSON.stringify(transactions));
+
   const backgroundStyle = {
     backgroundColor: isDarkMode ? Colors.darker : Colors.lighter,
   };
@@ -98,7 +100,7 @@ export const EntryScreen: FC = function EntryScreen() {
             color={'#d5b350'}
             onPress={() => {
               getRealmService()
-                .transportService.sendFakeTransactions()
+                .transportService?.sendFakeTransactions()
                 .catch(e => console.log('e', e));
             }}
           />
@@ -131,7 +133,7 @@ export const EntryScreen: FC = function EntryScreen() {
             }}
           />
 
-          <Section title="Products">
+          <Section title="Boxes">
             {data.map((box, index) => (
               <DataRow
                 key={box.Id}
@@ -155,7 +157,18 @@ export const EntryScreen: FC = function EntryScreen() {
 
           <Section title="Sales">
             {sales.map((sale, index) => (
-              <DataRow key={sale.Id}>
+              <DataRow
+                key={sale.Id}
+                onPress={() => {
+                  const service = getRealmService();
+
+                  service.safeWrite(() => {
+                    const now = new Date();
+                    sale.DateTime = now;
+                    sale.OptionalDateTime = addHours(now, 2);
+                  });
+                }}
+              >
                 <Text adjustsFontSizeToFit={true}>{index}</Text>
                 <Text adjustsFontSizeToFit={true}>{sale.Id}</Text>
                 <Text adjustsFontSizeToFit={true}>{format(sale.DateTime, 'pp')}</Text>
@@ -164,12 +177,12 @@ export const EntryScreen: FC = function EntryScreen() {
           </Section>
 
           <Section title="Transactions">
-            {transactions.map((transaction, index) => (
-              <DataRow key={transaction.Id}>
-                <Text adjustsFontSizeToFit={true}>{index}</Text>
-                <Text adjustsFontSizeToFit={true}>{JSON.stringify(transaction.toJSON())}</Text>
-              </DataRow>
-            ))}
+            {/*{transactions.map((transaction, index) => (*/}
+            {/*  <DataRow key={transaction.Id}>*/}
+            {/*    <Text adjustsFontSizeToFit={true}>{index}</Text>*/}
+            {/*    <Text adjustsFontSizeToFit={true}>{JSON.stringify(transaction.toJSON())}</Text>*/}
+            {/*  </DataRow>*/}
+            {/*))}*/}
           </Section>
         </View>
       </ScrollView>

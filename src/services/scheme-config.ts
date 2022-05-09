@@ -3,6 +3,7 @@ import { DbSchemeConfig } from 'services/d';
 export const schemeConfig: DbSchemeConfig = {
   Sales: {
     properties: {
+      OptionalDateTime: true,
       DateTime: true,
       Id: true,
     },

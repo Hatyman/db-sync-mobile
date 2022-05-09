@@ -45,7 +45,7 @@ export function useRealmData<T extends Record<string | number, any>>({
 
   useEffect(() => {
     const service = getRealmService();
-    service.open().then(({ realm, snapshotRealm }) => {
+    service.openIfNeeded().then(({ realm, snapshotRealm }) => {
       realmRef.current = realm;
       realmSnapshotTempRef.current = snapshotRealm;
       const dataReference = realm.objects<T>(type);
@@ -90,13 +90,20 @@ export function useRealmData<T extends Record<string | number, any>>({
                 // but you can update a UI list, etc. based on the indexToBeDeleted.
                 console.log('Deleted index', indexIsBeingDeleted);
                 const snapshotDeletedItem = snapshotReference[indexIsBeingDeleted];
-                console.log('Deleted  data', snapshotDeletedItem);
+                console.log('Deleted snapshot data', snapshotDeletedItem);
 
                 const deletedItemId = snapshotDeletedItem[primaryKeyName];
                 const instanceTransactions =
                   typeTransactions?.[ChangeTypeNumber.Delete]?.get(deletedItemId);
 
-                // We delete item there to keep its data for finding applied transaction
+                /**
+                 * We delete item there to keep equal with "showed" data.
+                 * We apply this change to snapshot data in any case because this applying was missed in hub-received
+                 * callback to keep deleted data and check there its transactions (below) and avoid wrong transactions.
+                 *
+                 * Other changes (insert, modify) are applied to snapshot only if there is no
+                 * transaction registered from hub, because it was already applied there.
+                 */
                 snapshotRealm.delete(snapshotDeletedItem);
 
                 if (instanceTransactions?.length) {
@@ -109,7 +116,7 @@ export function useRealmData<T extends Record<string | number, any>>({
                 }
 
                 try {
-                  realm.create<TransactionScheme>(RealmService.TransactionsName, {
+                  realm.create<TransactionScheme>(RealmService.transactionsName, {
                     Id: RealmService.getNewId(),
                     ChangeType: ChangeTypeNumber.Delete,
                     InstanceId: deletedItemId,
@@ -127,7 +134,6 @@ export function useRealmData<T extends Record<string | number, any>>({
                 console.log('Inserted', insertedObject);
                 const insertedItemId = insertedObject[primaryKeyName];
                 console.log('InstanceId', insertedItemId);
-                snapshotRealm.create(type, insertedObject);
 
                 const instanceTransactions =
                   typeTransactions?.[ChangeTypeNumber.Insert]?.get(insertedItemId);
@@ -140,6 +146,8 @@ export function useRealmData<T extends Record<string | number, any>>({
                   continue;
                 }
 
+                snapshotRealm.create(type, insertedObject);
+
                 const content = {} as Record<string, any>;
 
                 for (const attribute of insertedObject.keys()) {
@@ -149,7 +157,7 @@ export function useRealmData<T extends Record<string | number, any>>({
                 }
 
                 try {
-                  realm.create<TransactionScheme>(RealmService.TransactionsName, {
+                  realm.create<TransactionScheme>(RealmService.transactionsName, {
                     Id: RealmService.getNewId(),
                     ChangeType: ChangeTypeNumber.Insert,
                     InstanceId: insertedItemId,
@@ -167,15 +175,32 @@ export function useRealmData<T extends Record<string | number, any>>({
                 const oldIndexIsBeingModified = changes.oldModifications[i];
                 const newIndexIsBeingModified = changes.newModifications[i];
 
-                const beforeModifications = snapshotReference[oldIndexIsBeingModified];
+                let beforeModifications: (T & Object) | undefined =
+                  snapshotReference[oldIndexIsBeingModified];
                 const afterModifications = currentData[newIndexIsBeingModified];
-                console.log('Modified from', beforeModifications);
-                console.log('Modified   to', afterModifications);
+
+                const modifiedItemId = afterModifications[primaryKeyName];
+
+                if (beforeModifications?.[primaryKeyName] !== modifiedItemId) {
+                  beforeModifications = snapshotReference[newIndexIsBeingModified];
+
+                  if (beforeModifications?.[primaryKeyName] !== modifiedItemId) {
+                    beforeModifications = snapshotRealm.objectForPrimaryKey(type, modifiedItemId);
+                  }
+
+                  if (beforeModifications?.[primaryKeyName] !== modifiedItemId) {
+                    console.warn(
+                      `Couldn't find ${type} snapshot for instance id: ${modifiedItemId}. It will be inserted to snapshot realm`
+                    );
+                    snapshotRealm.create(type, afterModifications, Realm.UpdateMode.Modified);
+                    continue;
+                  }
+                }
 
                 const changeSet: Record<string, string | number | boolean | null> = {};
                 let attributes = afterModifications.keys();
                 for (const attribute of attributes) {
-                  const attributeSnapshot = beforeModifications[attribute];
+                  const attributeSnapshot = beforeModifications?.[attribute];
                   const currentAttribute = afterModifications[attribute];
 
                   if (
@@ -192,15 +217,11 @@ export function useRealmData<T extends Record<string | number, any>>({
 
                 if (!Object.values(changeSet).length) continue;
 
-                const modifiedItemId = afterModifications[primaryKeyName];
                 const instanceTransactions =
                   typeTransactions?.[ChangeTypeNumber.Update]?.get(modifiedItemId);
                 const appliedTransaction = instanceTransactions?.find(x =>
                   equal(x.changes, changeSet)
                 );
-
-                // We do it there to keep data difference to find appliedTransaction and get proper changeSet
-                snapshotRealm.create(type, afterModifications, Realm.UpdateMode.Modified);
 
                 if (appliedTransaction) {
                   if (instanceTransactions!.length === 1) {
@@ -214,8 +235,14 @@ export function useRealmData<T extends Record<string | number, any>>({
                   continue;
                 }
 
+                console.log('Modified from', beforeModifications);
+                console.log('Modified   to', afterModifications);
+
+                // We do it there to keep data difference to find appliedTransaction and get proper changeSet
+                snapshotRealm.create(type, afterModifications, Realm.UpdateMode.Modified);
+
                 try {
-                  realm.create<TransactionScheme>(RealmService.TransactionsName, {
+                  realm.create<TransactionScheme>(RealmService.transactionsName, {
                     Id: RealmService.getNewId(),
                     ChangeType: ChangeTypeNumber.Update,
                     InstanceId: modifiedItemId,
@@ -241,11 +268,11 @@ export function useRealmData<T extends Record<string | number, any>>({
       }
 
       return () => {
-        service.usRegisterTypeListener(type);
+        service.unRegisterTypeListener(type);
         dataReference.removeAllListeners();
         realmRef.current = null;
         realmSnapshotTempRef.current = null;
-        realm.close();
+        service.close();
       };
     });
   }, []);
@@ -257,8 +284,8 @@ export function useTransactions() {
   const [data, setData] = useState<(TransactionScheme & Realm.Object)[]>([]);
   useEffect(() => {
     const service = getRealmService();
-    service.open().then(({ realm }) => {
-      const transactions = realm.objects<TransactionScheme>(RealmService.TransactionsName);
+    service.openIfNeeded().then(({ realm }) => {
+      const transactions = realm.objects<TransactionScheme>(RealmService.transactionsName);
       setData([...transactions]);
       try {
         transactions.addListener(() => {

@@ -9,6 +9,7 @@ type TransportServiceProps = {
   path?: string;
   onTransactionsReceived: TransactionsReceivedCallback;
   lastSyncTransactionId?: string;
+  onDisconnect?: (error?: Error) => void;
 };
 
 export class TransportService {
@@ -27,6 +28,7 @@ export class TransportService {
     path = '/transactions-sync',
     onTransactionsReceived,
     lastSyncTransactionId,
+    onDisconnect,
   }: TransportServiceProps) {
     const getAxios = getAxiosFactory();
     const axios = getAxios();
@@ -40,7 +42,10 @@ export class TransportService {
       .build();
     this._connection.on('test', this.onTest);
     this._connection.on('client-received', onTransactionsReceived);
-    this._connection.onclose(this.onClose);
+    this._connection.onclose(error => {
+      onDisconnect?.(error);
+      this.onClose(error);
+    });
     this._connection.onreconnecting(this.onReconnecting);
     this._connection.onreconnected(this.onReconnected);
 
@@ -53,6 +58,7 @@ export class TransportService {
 
   private onClose = (error?: Error) => {
     console.log('error', error);
+    console.log('Connection was closed');
   };
 
   private onReconnecting = (error?: Error) => {
