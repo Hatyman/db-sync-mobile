@@ -10,6 +10,7 @@ type TransportServiceProps = {
   onTransactionsReceived: TransactionsReceivedCallback;
   lastSyncTransactionId?: string;
   onDisconnect?: (error?: Error) => void;
+  getNewBaseUrlOnReconnecting: (baseUrl: string, error?: Error) => string;
 };
 
 export class TransportService {
@@ -29,6 +30,7 @@ export class TransportService {
     onTransactionsReceived,
     lastSyncTransactionId,
     onDisconnect,
+    getNewBaseUrlOnReconnecting,
   }: TransportServiceProps) {
     const getAxios = getAxiosFactory();
     const axios = getAxios();
@@ -46,7 +48,10 @@ export class TransportService {
       onDisconnect?.(error);
       this.onClose(error);
     });
-    this._connection.onreconnecting(this.onReconnecting);
+    this._connection.onreconnecting((error?: Error) => {
+      this._connection.baseUrl = getNewBaseUrlOnReconnecting(this._connection.baseUrl, error);
+      this.onReconnecting(error);
+    });
     this._connection.onreconnected(this.onReconnected);
 
     this.connectionPromise = this.openConnection();

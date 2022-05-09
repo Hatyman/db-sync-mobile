@@ -85,6 +85,7 @@ export class RealmService {
         onDisconnect: () => {
           this.isReadyToSendTransactions = false;
         },
+        getNewBaseUrlOnReconnecting: this.getNewBaseUrlOnReconnecting,
       });
       await this.loadSchemas();
     })();
@@ -674,4 +675,22 @@ export class RealmService {
       .reduce((accumulator: string, item) => `${accumulator} || ${propertyName} == '${item}'`, '')
       .substring(4);
   }
+
+  private static urlQueryRegExp = /lastSyncTransactionId=[^&]+(&?)/;
+  private getNewBaseUrlOnReconnecting = (baseUrl: string): string => {
+    if (!this.realm || this.realm.isClosed) return baseUrl;
+
+    this.isReadyToSendTransactions = false;
+
+    const lastSyncTransaction = this.realm.objectForPrimaryKey<LastSyncTransactionScheme>(
+      RealmService.lastSyncTransactionScheme.name,
+      RealmService.lastSyncTransactionKey
+    );
+    const lastSyncTransactionId = lastSyncTransaction?.TransactionId ?? '';
+
+    return baseUrl.replace(
+      RealmService.urlQueryRegExp,
+      `lastSyncTransactionId=${lastSyncTransactionId}$1`
+    );
+  };
 }
