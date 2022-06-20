@@ -2,9 +2,11 @@ import React from 'react';
 import { StyleSheet, Text, useColorScheme, View } from 'react-native';
 import { Colors } from 'react-native/Libraries/NewAppScreen';
 
-export const Section: React.FC<{
+type OwnProps = {
   title: string;
-}> = ({ children, title }) => {
+};
+
+export const Section: React.FC<OwnProps> = props => {
   const isDarkMode = useColorScheme() === 'dark';
   return (
     <View style={ownStyles.sectionContainer}>
@@ -16,9 +18,9 @@ export const Section: React.FC<{
           },
         ]}
       >
-        {title}
+        {props.title}
       </Text>
-      {children}
+      {props.children}
     </View>
   );
 };

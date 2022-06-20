@@ -1,19 +1,23 @@
 import React, { FC } from 'react';
-import { StyleSheet, TouchableOpacity, useColorScheme } from 'react-native';
-import { Colors } from 'react-native/Libraries/NewAppScreen';
+import { StyleProp, StyleSheet, TouchableOpacity, useColorScheme, ViewStyle } from 'react-native';
 
 type OwnProps = {
   onPress?: () => void;
   onLongPress?: () => void;
+  style?: StyleProp<ViewStyle>;
 };
 
 export const DataRow: FC<OwnProps> = function DataRow(props) {
   const isDarkMode = useColorScheme() === 'dark';
   return (
     <TouchableOpacity
-      style={[ownStyles.container, isDarkMode ? ownStyles.dark : ownStyles.light]}
+      style={StyleSheet.compose<ViewStyle>(
+        [ownStyles.container, isDarkMode ? ownStyles.dark : ownStyles.light],
+        props.style
+      )}
       onPress={props.onPress}
       onLongPress={props.onLongPress}
+      activeOpacity={0.7}
     >
       {props.children}
     </TouchableOpacity>

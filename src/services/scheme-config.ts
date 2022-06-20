@@ -12,6 +12,8 @@ export const schemeConfig: DbSchemeConfig = {
     properties: {
       Id: true,
       IsFull: true,
+      Color: true,
+      Count: true,
     },
   },
   BoxSale: {
