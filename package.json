@@ -4,7 +4,9 @@
   "private": true,
   "scripts": {
     "android": "react-native run-android",
+    "android:release": "react-native run-android --variant=release",
     "android:clean": "yarn cleanup-android && yarn configure:android && react-native run-android",
+    "android:clean:release": "yarn cleanup-android && yarn configure:android && react-native run-android --variant=release",
     "ios": "react-native run-ios",
     "start": "react-native start",
     "test": "jest",
